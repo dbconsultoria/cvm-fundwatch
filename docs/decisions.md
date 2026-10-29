@@ -391,3 +391,27 @@ Short ADR style entries. Status is `accepted`, `proposed` (waiting for review) o
 - Consequence: the forest can only add low severity findings, so it never changes alerts. A
   real data smoke run (2 training months) took 2 minutes and added 159 low findings to 2026-10,
   5 of them on the crash day.
+
+## 0034 Reporting layer and dashboard
+
+- Status: accepted
+- Decision:
+  - `gold/reporting/*.parquet`: six small unpartitioned tables (daily AUM and flows with a
+    completeness flag, monthly returns per peer group, anomalies per day, recent high and medium
+    anomalies with fund names, restatements per month, PTAX). Each run replaces the rows of its
+    window months and keeps the rest from the previous file, so the tables cover the whole
+    history while a run only touches a few months. About 220 KB for 11 months.
+  - A date is complete when it has at least 90% of the median class count of the 10 dates
+    before it (ADR 0021); charts of levels use complete dates only.
+  - Dashboard: Observable Framework 1.13 (static, Markdown pages, Observable Plot). Data
+    loaders are Python scripts running DuckDB over the reporting tables at build time and
+    writing chart ready CSV, so the browser downloads tens of KB, never the lake. The loader
+    interpreter comes from `CVM_PYTHON` (the project virtualenv).
+  - `pages.yml` runs after every completed ETL on main (not only successful ones: the dataset
+    changes only on successful commits, so it is always consistent), downloads the reporting
+    tables at the dataset head with the prod token, builds and deploys with
+    `upload-pages-artifact` and `deploy-pages`.
+  - CI builds the dashboard from synthetic reporting tables, so a broken page fails a pull
+    request.
+- Consequence: the dashboard is as fresh as the last ETL and costs nothing to serve. Fund names
+  were added to `silver/fund_registry` for the anomaly table.

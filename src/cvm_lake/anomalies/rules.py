@@ -124,7 +124,8 @@ def anomaly_selects(cfg: AnomalyConfig, table: str = "flags") -> list[str]:
         f" FROM {t} WHERE l3 AND {stat_ok} AND NOT structural",
         f"SELECT *, 'structural_event', 'medium', abs(residual)"
         f" FROM {t} WHERE structural AND {stat_ok}",
-        f"SELECT *, 'shareholder_spike', 'medium', abs(ln(shareholder_ratio))"
+        "SELECT *, 'shareholder_spike', 'medium',"
+        " abs(ln((shareholders + 1) / (prev_shareholders + 1)))"
         f" FROM {t} WHERE shareholder_jump AND NOT l3 AND {stat_ok}",
         f"SELECT *, 'distribution_event', 'low', abs(log_ret)"
         f" FROM {t} WHERE distribution AND {stat_ok}",

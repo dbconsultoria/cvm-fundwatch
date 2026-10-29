@@ -199,7 +199,8 @@ def build_fund_registry(
             NULLIF(c.Tipo_Classe, '') AS class_type,
             NULLIF(c.Situacao, '') AS situation,
             {normalize_cnpj_sql("f.CNPJ_Fundo")} AS fund_cnpj,
-            TRY_CAST(NULLIF(f.Data_Adaptacao_RCVM175, '') AS DATE) AS adapted_on
+            TRY_CAST(NULLIF(f.Data_Adaptacao_RCVM175, '') AS DATE) AS adapted_on,
+            NULLIF(trim(c.Denominacao_Social), '') AS name
         FROM c LEFT JOIN f USING (ID_Registro_Fundo)
     """)
     if hist is not None:
@@ -227,7 +228,7 @@ def build_fund_registry(
                {peer.format(col="h.cvm_class")} AS peer_group,
                h.cvm_class, CAST(NULL AS VARCHAR) AS anbima_class, c.is_fic,
                CAST(NULL AS VARCHAR) AS class_type, CAST(NULL AS VARCHAR) AS situation,
-               c.fund_cnpj, c.adapted_on
+               c.fund_cnpj, c.adapted_on, c.name
         FROM h
         LEFT JOIN reg_current c USING (cnpj)
         LEFT JOIN peer_map pm ON pm.raw = h.cvm_class
@@ -236,7 +237,7 @@ def build_fund_registry(
         SELECT c.cnpj, 'registro_classe', coalesce(c.adapted_on, DATE '1900-01-01'),
                CAST(NULL AS DATE), {peer.format(col="c.cvm_class")},
                c.cvm_class, c.anbima_class, c.is_fic, c.class_type, c.situation,
-               c.fund_cnpj, c.adapted_on
+               c.fund_cnpj, c.adapted_on, c.name
         FROM reg_current c
         LEFT JOIN peer_map pm ON pm.raw = c.cvm_class
         ORDER BY cnpj, source, valid_from

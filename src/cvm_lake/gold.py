@@ -46,7 +46,7 @@ def load_registry(con: duckdb.DuckDBPyConnection, root: Path) -> None:
             CREATE OR REPLACE TEMP TABLE registry (
                 cnpj VARCHAR, source VARCHAR, valid_from DATE, valid_to DATE, peer_group VARCHAR,
                 cvm_class VARCHAR, anbima_class VARCHAR, is_fic BOOLEAN, class_type VARCHAR,
-                situation VARCHAR, fund_cnpj VARCHAR, adapted_on DATE)
+                situation VARCHAR, fund_cnpj VARCHAR, adapted_on DATE, name VARCHAR)
         """)
 
 

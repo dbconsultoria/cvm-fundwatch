@@ -15,9 +15,9 @@ build/
 *.token
 
 # Local lake output and downloaded raw data (never committed)
-data/
-lake/
-_out/
+/data/
+/lake/
+/_out/
 *.zip
 *.parquet
 !tests/fixtures/**/*.parquet
@@ -25,10 +25,15 @@ _out/
 # Dashboard build
 dashboard/node_modules/
 dashboard/dist/
-dashboard/.observablehq/cache/
+dashboard/src/.observablehq/cache/
 
 # IDE / OS
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
+/model_out/
+/reporting/
+/demo/
+/alerts.md
+/experiments/results/*.tmp

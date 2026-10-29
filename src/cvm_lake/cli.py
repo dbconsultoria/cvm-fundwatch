@@ -237,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         "evaluate": cmd_evaluate,
         "train": modelops.cmd_train,
         "publish-model": modelops.cmd_publish_model,
+        "fetch-reporting": modelops.cmd_fetch_reporting,
     }
     return commands[args.command](args)
 

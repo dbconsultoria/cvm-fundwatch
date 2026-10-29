@@ -31,6 +31,7 @@ from cvm_lake.http import HttpClient
 from cvm_lake.manifest import MANIFEST_NAME, Manifest
 from cvm_lake.periods import shift_month
 from cvm_lake.pipeline import RunReport, run_pipeline
+from cvm_lake.reporting import REPORTING_PATHS
 from cvm_lake.sources import bcb_ptax, cvm_inf_diario, cvm_registry
 from cvm_lake.store import LakeStore
 
@@ -77,6 +78,7 @@ def input_paths(manifest: Manifest, months: list[str], history_months: int = 3) 
         entry = manifest.get(cvm_registry.SOURCE, table.name)
         if entry:
             paths.add(entry.path)
+    paths.update(REPORTING_PATHS)  # merged with the months of this run
     return sorted(paths)
 
 
@@ -96,6 +98,10 @@ def output_paths(report: RunReport, manifest: Manifest) -> list[str]:
         paths.update((gold.daily_flows_path(g.month), gold.returns_path(g.month)))
     paths.update(anomalies_path(a.month) for a in report.anomalies)
     paths.update(restatements_path(r.month) for r in report.restatements if r.new_rows)
+    if report.reporting is not None:
+        paths.update(
+            p for p, n in zip(REPORTING_PATHS, report.reporting.rows.values(), strict=True) if n
+        )
     return sorted(paths)
 
 

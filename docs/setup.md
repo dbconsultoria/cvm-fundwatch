@@ -56,18 +56,24 @@ checks out `development`, but its ref is `main`.
 Why reviewers are on `prod-approval` and not on `prod`: reviewers on `prod` would block the
 unattended daily run (ADR 0025).
 
-## 4. Branch protection
+## 4. GitHub Pages
+
+Settings, Pages, Build and deployment, Source: **GitHub Actions**. GitHub creates the
+`github-pages` environment on the first deployment; restrict its deployment branches to `main`.
+The site will be at `https://<github user>.github.io/cvm-fundwatch/`.
+
+## 5. Branch protection
 
 Settings, Rules, Rulesets, New branch ruleset:
 
-- **main**: target `main`; require a pull request before merging; require status check
-  `test` (the job in `ci.yml`; it appears after the first CI run); block force pushes; restrict
-  deletions.
+- **main**: target `main`; require a pull request before merging; require the status checks
+  `test` and `dashboard` (the jobs in `ci.yml`; they appear after the first CI run); block force
+  pushes; restrict deletions.
 - **development** (optional, lighter): require status check `test`; block force pushes.
 
 Promotion to prod is a pull request from `development` to `main`.
 
-## 5. First runs
+## 6. First runs
 
 Actions, etl, Run workflow:
 
@@ -92,7 +98,7 @@ From then on the ETL runs Monday to Saturday at 17:23 UTC for both environments,
 lookback on Saturdays, and training runs on Sundays at 06:17 UTC. Until a model exists, the
 Isolation Forest layer is off and everything else works.
 
-## 6. Local runs against Hugging Face
+## 7. Local runs against Hugging Face
 
 ```bash
 export HF_OWNER=<owner>

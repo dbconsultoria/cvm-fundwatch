@@ -4,8 +4,8 @@ A zero cost data pipeline for Brazilian investment fund data. It runs entirely o
 builds a bronze/silver/gold lake of Parquet files on Hugging Face datasets, detects anomalies in
 the daily fund reports, and publishes a static dashboard on GitHub Pages.
 
-> Status: Phase 6 (lake, publishing to Hugging Face, anomaly detection with alerts, evaluation
-> harness, restatements, weekly Isolation Forest training). The dashboard comes next.
+> Status: Phase 7 (lake, publishing to Hugging Face, anomaly detection with alerts, evaluation
+> harness, weekly Isolation Forest training, dashboard on GitHub Pages). Polish comes next.
 
 ## Sources
 
@@ -38,6 +38,7 @@ TODO (Phase 8): diagram. Short version:
 | `gold/returns_brl_usd` | `ano_mes` | class or subclass per day | daily return in BRL and USD |
 | `gold/anomalies` | `ano_mes` | report x anomaly type | see [docs/anomaly_detection.md](docs/anomaly_detection.md) |
 | `gold/restatements` | `ano_mes` | changed value | values CVM corrected after publishing, appended per run |
+| `gold/reporting` | none | small aggregates | tables behind the dashboard, see [dashboard/README.md](dashboard/README.md) |
 
 Every run reprocesses a window of months (default: current and previous) and checks the result
 before it counts as done. See [docs/decisions.md](docs/decisions.md) for the reasons.
@@ -46,9 +47,10 @@ before it counts as done. See [docs/decisions.md](docs/decisions.md) for the rea
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | push, pull request | ruff, pytest |
+| `ci.yml` | push, pull request | ruff, pytest, dashboard build from demo data |
 | `etl.yml` | Mon to Sat 17:23 UTC, manual | runs the pipeline for `dev` (branch `development`) and `prod` (branch `main`) and commits to Hugging Face, one commit per run |
 | `train.yml` | Sundays 06:17 UTC, manual | trains the Isolation Forest per environment, compares it with the champion, publishes the winner to the HF model repo (prod after approval) |
+| `pages.yml` | after each ETL on main, manual | builds the dashboard from `gold/reporting` and deploys it to GitHub Pages |
 | `keepalive.yml` | monthly | keeps the schedules enabled |
 
 Manual runs default to a dry run: everything is built, nothing is published, and the output is

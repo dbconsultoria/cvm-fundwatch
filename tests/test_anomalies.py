@@ -3,6 +3,7 @@ residual on a known series, and market crashes that must not be flagged."""
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -302,3 +303,16 @@ def test_alerts_only_new_recent_and_within_budget(root: Path) -> None:
     assert md.count("| 2026-09-28 | 00.000.000/0000-0") == 2  # formatted CNPJ
     assert "huggingface.co/datasets/o/cvm-fundos-lake" in md
     assert format_cnpj("123") == "123"
+
+
+def test_shareholders_dropping_to_zero_give_a_finite_score(root: Path) -> None:
+    panel = Panel()
+    panel.set(12, "2026-09-10", shareholders=0)
+    for d in panel.days:
+        if d > date(2026, 9, 10):
+            panel.rows[(panel.funds[12], d)]["shareholders"] = 0
+    panel.scale(12, "2026-09-01", 10, ("shareholders",), until="2026-09-09")  # 1,000+ before
+    _, rows = detect(root, panel)
+    spike = [r for r in rows if r["fund_id"] == panel.funds[12] and r["dt"] == date(2026, 9, 10)]
+    assert spike and all(math.isfinite(r["score"]) for r in spike)
+    assert "Infinity" not in spike[0]["features"] and "inf" not in spike[0]["features"]

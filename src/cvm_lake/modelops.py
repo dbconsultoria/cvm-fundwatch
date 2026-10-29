@@ -29,6 +29,7 @@ from cvm_lake.anomalies.train import (
 from cvm_lake.config import ENVIRONMENTS, EnvironmentConfig, load_settings
 from cvm_lake.guard import GuardError, resolve_hf_target
 from cvm_lake.periods import month_of, shift_month, today_brt
+from cvm_lake.reporting import REPORTING_PATHS
 from cvm_lake.store import HfModelStore, HfStore
 
 log = logging.getLogger(__name__)
@@ -78,6 +79,13 @@ def add_parsers(sub: argparse._SubParsersAction) -> None:  # type: ignore[type-a
     train.add_argument("--champion-dir", type=Path, help="local target: current champion")
     train.add_argument("--anomaly-config", type=Path)
     train.add_argument("-v", "--verbose", action="store_true")
+
+    fetch = sub.add_parser(
+        "fetch-reporting", help="download gold/reporting from the HF dataset repo (dashboard)"
+    )
+    fetch.add_argument("--env", choices=ENVIRONMENTS, required=True)
+    fetch.add_argument("--out", type=Path, required=True)
+    fetch.add_argument("-v", "--verbose", action="store_true")
 
     pub = sub.add_parser("publish-model", help="push a trained model to the HF model repo")
     pub.add_argument("--env", choices=ENVIRONMENTS, required=True)
@@ -150,3 +158,24 @@ def cmd_publish_model(args: argparse.Namespace) -> int:
     sha = store.commit(args.dir, list(PUBLISHED_FILES), f"model {tag}", head.sha if head else None)
     log.info("published %s to %s: %s", tag, store.repo_id, sha)
     return 0
+
+
+def cmd_fetch_reporting(args: argparse.Namespace) -> int:
+    """Reporting tables at the current head, for the dashboard build. Read only."""
+    env = load_settings(args.env).environment
+    try:
+        target = resolve_hf_target(env, os.environ)
+        store = HfStore(target.repo_id, target.token)
+        store.verify(env.name)
+    except GuardError as exc:
+        log.error("guard: %s", exc)
+        return 2
+    head = store.head()
+    store.download(REPORTING_PATHS, args.out, head.sha if head else None)
+    found = [p for p in REPORTING_PATHS if (args.out / p).exists()]
+    log.info("downloaded %d reporting tables from %s @ %s", len(found), store.repo_id, head)
+    (args.out / "source.json").write_text(
+        json.dumps({"repo_id": store.repo_id, "commit": head.sha if head else None}) + "\n",
+        encoding="utf-8",
+    )
+    return 0 if found else 1

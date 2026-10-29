@@ -106,3 +106,26 @@ def test_keepalive_covers_scheduled_workflows() -> None:
     script = _load("keepalive.yml")["jobs"]["keepalive"]["steps"][0]["run"]
     for name in ("etl.yml", "train.yml"):
         assert name in script
+
+
+def test_pages_design() -> None:
+    wf = _load("pages.yml")
+    assert wf["on"]["workflow_run"] == {
+        "workflows": ["etl"],
+        "types": ["completed"],
+        "branches": ["main"],
+    }
+    assert wf["permissions"] == {"contents": "read"}
+    build, deploy = wf["jobs"]["build"], wf["jobs"]["deploy"]
+    assert build["environment"] == "prod"
+    assert "cancelled" in build["if"]
+    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+    assert deploy["environment"]["name"] == "github-pages"
+    uses = [s.get("uses", "") for s in build["steps"]]
+    assert "actions/upload-pages-artifact@v5" in uses
+
+
+def test_ci_builds_the_dashboard() -> None:
+    steps = _load("ci.yml")["jobs"]["dashboard"]["steps"]
+    script = " ".join(s.get("run", "") for s in steps)
+    assert "demo_data.py" in script and "npm run build" in script

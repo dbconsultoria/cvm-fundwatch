@@ -35,3 +35,35 @@ jobs:
 
       - name: Test
         run: uv run pytest -m "not network"
+
+  # The dashboard must build on every change, from synthetic reporting tables (no lake needed).
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: Demo reporting tables
+        run: uv run python dashboard/scripts/demo_data.py demo
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Build
+        working-directory: dashboard
+        env:
+          REPORTING_DIR: ${{ github.workspace }}/demo
+          CVM_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          npm ci
+          npm run build

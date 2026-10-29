@@ -1,0 +1,78 @@
+name: pages
+
+# Builds the dashboard from gold/reporting of the prod dataset and deploys it to GitHub Pages
+# (ADR 0034). Runs after every completed ETL on main: the dataset only changes on a successful
+# commit, so even after a failed ETL it holds a consistent state to show.
+
+on:
+  workflow_run:
+    workflows: [etl]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: prod
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_OWNER: ${{ vars.HF_OWNER }}
+      CVM_LAKE_ENV: ${{ vars.CVM_LAKE_ENV }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked --no-dev
+
+      - name: Download the reporting tables
+        run: uv run --no-dev cvm-lake fetch-reporting --env prod --out reporting
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Build the dashboard
+        working-directory: dashboard
+        env:
+          REPORTING_DIR: ${{ github.workspace }}/reporting
+          CVM_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dashboard/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

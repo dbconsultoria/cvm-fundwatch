@@ -7,7 +7,7 @@ extreme values do not stretch the random split ranges of the trees:
 - ``abs_z_excess``: |robust z of the excess return over peers| (layer 4), 0 on market moves
 - ``abs_residual``: |accounting identity residual| (layer 3), in percent
 - ``flow_ratio``: (subscriptions + redemptions) / previous equity, in percent
-- ``shareholder_change``: |ln(shareholders / previous shareholders)|
+- ``shareholder_change``: |ln((shareholders + 1) / (previous shareholders + 1))|
 - ``unchanged_reports``: reports since the quota last changed
 
 The threshold is not ``contamination``: it is chosen on injected errors (best F1), then raised
@@ -47,7 +47,8 @@ FEATURE_SQL = """
     ln(1 + 100 * coalesce(abs(residual), 0)) AS abs_residual,
     ln(1 + 100 * coalesce(abs((coalesce(subscriptions, 0) + coalesce(redemptions, 0))
                               / nullif(prev_equity, 0)), 0)) AS flow_ratio,
-    coalesce(abs(ln(shareholder_ratio)), 0) AS shareholder_change,
+    -- +1 on both sides: a drop to zero shareholders must not give an infinite value
+    coalesce(abs(ln((shareholders + 1) / (prev_shareholders + 1))), 0) AS shareholder_change,
     ln(1 + coalesce(unchanged_reports, 0)) AS unchanged_reports
 """
 MODEL_FILE, META_FILE = "model.skops", "model.json"

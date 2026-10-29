@@ -337,6 +337,7 @@ def write_silver_registry(root: Path, peers: dict[str, str]) -> None:
             "peer_group": peer,
             "anbima_class": f"{peer} Livre",
             "is_fic": False,
+            "name": f"FUNDO {cnpj}",
         }
         for cnpj, peer in peers.items()
     ]
@@ -354,6 +355,7 @@ def write_silver_registry(root: Path, peers: dict[str, str]) -> None:
             ("situation", pa.string()),
             ("fund_cnpj", pa.string()),
             ("adapted_on", pa.date32()),
+            ("name", pa.string()),
         ]
     )
     table = pa.Table.from_pylist([{f.name: r.get(f.name) for f in schema} for r in rows], schema)

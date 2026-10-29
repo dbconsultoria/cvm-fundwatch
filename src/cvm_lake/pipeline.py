@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from cvm_lake import bronze, gold, quality, silver
+from cvm_lake import bronze, gold, quality, reporting, silver
 from cvm_lake.anomalies.detector import AnomalyStats, detect_month
 from cvm_lake.anomalies.model import ForestModel
 from cvm_lake.anomalies.report import Alert, select_alerts
@@ -44,6 +44,7 @@ class RunReport:
     gold: list[gold.GoldStats] = field(default_factory=list)
     anomalies: list[AnomalyStats] = field(default_factory=list)
     restatements: list[RestatementStats] = field(default_factory=list)
+    reporting: reporting.ReportingStats | None = None
     alerts: list[Alert] = field(default_factory=list)
     checks: list[CheckResult] = field(default_factory=list)
 
@@ -123,6 +124,7 @@ def run_pipeline(
         report.anomalies.append(anomaly_stats)
         report.checks += quality.check_anomalies(con, root, anomaly_stats)
     report.alerts = select_alerts(con, root, built, run_id, today, anomaly_cfg)
+    report.reporting = reporting.build_reporting(con, root, built)
     con.close()
 
     if report.failed:
