@@ -69,6 +69,12 @@ def test_etl_design() -> None:
     saturday = next(s for s in crons if s.endswith("6"))
     assert f'"$SCHEDULE" = "{saturday}"' in plan, "plan must recognise the weekly cron"
 
+    assert etl["permissions"] == {"contents": "read", "issues": "write"}
+    issue = next(s for s in etl["steps"] if s.get("name") == "Open or update the alerts issue")
+    assert "matrix.env == 'prod'" in issue["if"]
+    run_step = next(s for s in etl["steps"] if s.get("name") == "Run pipeline")
+    assert "--alerts-out alerts.md" in run_step["run"]
+
     upload = next(s for s in etl["steps"] if "upload-artifact" in s.get("uses", ""))
     assert upload["with"]["retention-days"] == 7
     assert "DRY_RUN == 'true'" in upload["if"]

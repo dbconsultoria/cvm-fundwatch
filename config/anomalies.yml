@@ -1,0 +1,46 @@
+# Anomaly detection v1 (ADR 0028). Fixed thresholds; Phase 5 evaluates them with injected errors.
+# Changing any value here means a new model_version.
+model_version: v1-rules-robust
+
+history_months: 3          # silver months loaded before the scored month (rolling windows)
+window: 63                 # prior reports in the rolling median/MAD (about 3 months)
+min_history: 30            # fewer prior reports: rules only
+market_day_share: 0.5      # a date is a market day when this share of the max daily reports exist
+
+rules:
+  stale_reports: 5         # quota unchanged for this many consecutive reports
+  gap_medium_days: 5       # missing market days between two reports: low below, medium from here
+  shareholder_ratio: 5.0   # shareholders x5 or /5 between two reports ...
+  shareholder_min_change: 100   # ... and at least this many shareholders gained or lost
+
+decimal_shift:
+  max_power: 3             # x10, x100, x1000 and inverses
+  tolerance: 0.01          # |log10(ratio) - k|; 0.01 is a ratio within 2.3% of 10^k
+
+robust:
+  z_return: 8.0            # layer 2: own log return vs own rolling median/MAD
+  z_residual: 8.0          # layer 3: accounting identity residual vs own history
+  min_abs_residual: 0.02   # layer 3 also needs |residual| >= 2% of the previous equity
+  residual_floor: 0.001    # MAD floor for the residual
+  explained_residual: 0.002  # |residual| below this: equity follows the quota (distribution)
+
+peers:
+  z_excess: 8.0            # layer 4: excess return over the peer median, vs own excess history
+  min_peers: 10
+  # Market move: the typical |z| of the fund's peer group, ANBIMA class or all funds, on the
+  # date or the one before, is at or above this. Layers 2 and 4 are then silent.
+  # Calibrated on March 2020 (3.0 let the credit shock of 2020-03-20/23 through; ADR 0028).
+  market_z: 2.0
+
+# MAD floor of daily log returns per peer group (money market funds are very smooth).
+mad_floor:
+  default: 0.001
+  "Renda Fixa": 0.0005
+  "FMP-FGTS": 0.001
+  "Cambial": 0.001
+  "Ações": 0.002
+  "Multimercado": 0.001
+
+alerts:
+  budget_per_day: 20       # at most this many high alerts per reference date
+  max_age_days: 10         # only alert on dates this recent (backfills do not flood the Issue)

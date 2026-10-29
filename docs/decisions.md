@@ -292,3 +292,40 @@ Short ADR style entries. Status is `accepted`, `proposed` (waiting for review) o
   Actions artifact kept for 7 days. Manual dispatches default to dry run.
 - Consequence: artifacts of a public GitHub repo can be downloaded by any signed in user. That
   includes dev data, which is acceptable because every byte comes from public sources.
+
+## 0028 Anomaly detection v1
+
+- Status: accepted
+- Decision: rules plus three robust statistical layers with fixed thresholds in
+  `config/anomalies.yml`, written to `gold/anomalies` per month. Details and the calibration
+  history in `docs/anomaly_detection.md`. The main choices:
+  - Rolling median and MAD over the previous 63 reports, never the current one.
+  - Layer 4 scales the excess return by the fund's own excess history, not by the
+    cross-sectional dispersion (which flagged 2% of all reports in heterogeneous peer groups).
+  - Market gate: layers 2 and 4 are silent when the typical z of the peer group, ANBIMA class
+    or the whole market is at least 2.0 on the date or the one before (lagged valuation).
+  - The reversal check reads the next report; the last days of a month are re-evaluated when the
+    next month arrives, since the window always recomputes M-1.
+  - Decimal shift works from the second report; the statistical layers need 30 prior reports.
+- Consequence: about 0.5% of reports flagged, about 0.1% high, and almost nothing on crash days
+  (2020-03 and 2026-10-26). March 2020 was used for calibration, so it is in-sample.
+
+## 0029 Anomaly output schema
+
+- Status: accepted
+- Decision: the columns asked for (`fund_id`, `class_id`, `dt`, `anomaly_type`, `score`,
+  `severity`, `features`, `model_version`, `first_seen_run`) plus `peer_group`. `fund_id` is
+  the silver `cnpj` (fund before 175, class after), `class_id` the silver `subclass_id`.
+  `features` is a JSON string, not a struct, so adding a feature never changes the Parquet
+  schema. Persistent conditions are reported once, on the first report of the streak.
+  `first_seen_run` comes from the previous version of the partition.
+- Consequence: the anomaly table stays small and stable; alerting on "new" is a filter.
+
+## 0030 Alerts
+
+- Status: accepted
+- Decision: new high severity rows, at most 10 days old, at most 20 per date. Only prod posts
+  them, as a comment on one GitHub Issue per month, from the ETL job with `issues: write`.
+  Dry runs and failed runs post nothing.
+- Consequence: a backfill or the 13 month Saturday rerun cannot flood the Issue; old findings
+  are in the dataset, not in notifications.

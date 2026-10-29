@@ -14,6 +14,7 @@ import duckdb
 import pyarrow.parquet as pq
 
 from cvm_lake import silver
+from cvm_lake.anomalies.detector import AnomalyStats, anomalies_path
 from cvm_lake.config import QualityConfig
 from cvm_lake.db import lit, one
 from cvm_lake.gold import GoldStats
@@ -180,5 +181,30 @@ def check_gold(stats: GoldStats, cfg: QualityConfig) -> list[CheckResult]:
             stats.peer_coverage >= cfg.min_peer_coverage,
             Severity.WARN,
             f"{stats.peer_coverage:.2%} of rows (min {cfg.min_peer_coverage:.0%})",
+        ),
+    ]
+
+
+def check_anomalies(
+    con: duckdb.DuckDBPyConnection, root: Path, stats: AnomalyStats
+) -> list[CheckResult]:
+    path = root / anomalies_path(stats.month)
+    scope = f"gold/anomalies/{stats.month}"
+    dups = _scalar(
+        con,
+        f"SELECT count(*) FROM (SELECT fund_id, class_id, dt, anomaly_type FROM {lit(path)} "
+        "GROUP BY ALL HAVING count(*) > 1)",
+    )
+    high = stats.by_severity.get("high", 0)
+    share = high / stats.scored_reports if stats.scored_reports else 0.0
+    return [
+        CheckResult("unique_key", scope, dups == 0, Severity.FAIL, f"{dups} keys"),
+        # A flood of high findings more likely means a data or code problem than real errors.
+        CheckResult(
+            "high_share",
+            scope,
+            share <= 0.005,
+            Severity.WARN,
+            f"{high} high of {stats.scored_reports} reports ({share:.3%}, warn above 0.5%)",
         ),
     ]

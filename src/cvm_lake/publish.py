@@ -20,6 +20,8 @@ from datetime import date
 from pathlib import Path
 
 from cvm_lake import gold, silver
+from cvm_lake.anomalies.detector import anomalies_path
+from cvm_lake.anomalies.settings import load_anomaly_config
 from cvm_lake.bronze import Status
 from cvm_lake.card import render_card
 from cvm_lake.config import Settings
@@ -51,7 +53,7 @@ def chunk_months(months: list[str], size: int) -> list[list[str]]:
     return [months[i : i + size] for i in range(0, len(months), size)]
 
 
-def input_paths(manifest: Manifest, months: list[str]) -> list[str]:
+def input_paths(manifest: Manifest, months: list[str], history_months: int = 3) -> list[str]:
     """Remote files a run over ``months`` needs locally, from the manifest."""
     paths: set[str] = set()
     for ym in months:
@@ -59,9 +61,14 @@ def input_paths(manifest: Manifest, months: list[str]) -> list[str]:
             entry = manifest.get(source, ym)
             if entry:
                 paths.add(entry.path)
+        paths.add(anomalies_path(ym))  # keeps first_seen_run of known findings
     before = shift_month(months[0], -1)
-    paths.add(silver.fund_daily_path(before))
     paths.add(silver.ptax_daily_path(before))
+    # gold needs the month before the window; anomalies need history_months before it and
+    # the month after it (reversal check of the last day)
+    for i in range(1, history_months + 1):
+        paths.add(silver.fund_daily_path(shift_month(months[0], -i)))
+    paths.add(silver.fund_daily_path(shift_month(months[-1], 1)))
     for table in cvm_registry.TABLES:
         entry = manifest.get(cvm_registry.SOURCE, table.name)
         if entry:
@@ -83,6 +90,7 @@ def output_paths(report: RunReport, manifest: Manifest) -> list[str]:
         paths.add(silver.FUND_REGISTRY_PATH)
     for g in report.gold:
         paths.update((gold.daily_flows_path(g.month), gold.returns_path(g.month)))
+    paths.update(anomalies_path(a.month) for a in report.anomalies)
     return sorted(paths)
 
 
@@ -114,7 +122,8 @@ def run_on_store(
         manifest = Manifest.load(manifest_path)
         if head:
             manifest.stamp_commit(head.title.removeprefix("run "), head.sha)
-        store.download(input_paths(manifest, chunk), root, revision)
+        history = load_anomaly_config().history_months
+        store.download(input_paths(manifest, chunk, history), root, revision)
 
         report = run_pipeline(
             settings=settings,

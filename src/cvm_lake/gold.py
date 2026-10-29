@@ -51,16 +51,22 @@ def load_registry(con: duckdb.DuckDBPyConnection, root: Path) -> None:
 
 
 def enrich_months(con: duckdb.DuckDBPyConnection, root: Path, ym: str) -> None:
-    """Temp table ``enriched``: silver fund_daily of M-1 and M plus peer group (ADR 0017).
+    """Temp table ``enriched``: silver fund_daily of M-1 and M plus peer group."""
+    enrich(con, root, [shift_month(ym, -1), ym])
 
-    Peer group precedence: the legacy class valid on the date, then the earliest legacy class
-    for dates before the history starts (most history begins in 2005), then the current class.
+
+def enrich(
+    con: duckdb.DuckDBPyConnection, root: Path, months: list[str], table: str = "enriched"
+) -> None:
+    """Temp table ``table``: silver fund_daily of ``months`` (those present) plus peer group.
+
+    Peer group precedence (ADR 0017): the legacy class valid on the date, then the earliest
+    legacy class for dates before the history starts (most history begins in 2005), then the
+    current class.
     """
-    paths = _existing(
-        root, [silver.fund_daily_path(shift_month(ym, -1)), silver.fund_daily_path(ym)]
-    )
+    paths = _existing(root, [silver.fund_daily_path(ym) for ym in months])
     con.execute(f"""
-        CREATE OR REPLACE TEMP TABLE enriched AS
+        CREATE OR REPLACE TEMP TABLE {table} AS
         WITH d AS (SELECT * FROM read_parquet({_parquet_list(paths)})),
              h AS (SELECT * FROM registry WHERE source = 'cad_fi_hist'),
              h_first AS (

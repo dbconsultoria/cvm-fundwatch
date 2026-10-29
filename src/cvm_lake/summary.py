@@ -60,6 +60,20 @@ def render_markdown(env_name: str, repo_id: str | None, chunks: list[ChunkResult
                 lines.append(f"| {s.month} | {s.layout} | {s.rows:,} | {flows} | {rets} | {cov} |")
             lines.append("")
 
+        if r.anomalies:
+            lines += ["**Anomalies**", ""]
+            lines += [
+                "| Month | Rows | High | Medium | Low | New high |",
+                "|---|---:|---:|---:|---:|---:|",
+            ]
+            for a in r.anomalies:
+                sev = a.by_severity
+                lines.append(
+                    f"| {a.month} | {a.rows:,} | {sev.get('high', 0):,} | {sev.get('medium', 0):,}"
+                    f" | {sev.get('low', 0):,} | {a.new_high:,} |"
+                )
+            lines += ["", f"Alerts (new high, within the daily budget): {len(r.alerts)}", ""]
+
         failed = [c for c in r.checks if not c.passed]
         lines.append(
             f"**Quality**: {len(r.checks)} checks, {sum(c.blocking for c in failed)} failed, "

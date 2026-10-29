@@ -4,8 +4,8 @@ A zero cost data pipeline for Brazilian investment fund data. It runs entirely o
 builds a bronze/silver/gold lake of Parquet files on Hugging Face datasets, detects anomalies in
 the daily fund reports, and publishes a static dashboard on GitHub Pages.
 
-> Status: Phase 3 (bronze, silver, gold, quality checks, publishing to Hugging Face from
-> GitHub Actions). Anomaly detection and the dashboard come in later phases.
+> Status: Phase 4 (lake, publishing to Hugging Face from GitHub Actions, anomaly detection v1
+> with GitHub Issue alerts). Evaluation, the ML layer and the dashboard come in later phases.
 
 ## Sources
 
@@ -36,6 +36,7 @@ TODO (Phase 8): diagram. Short version:
 | `silver/ptax_daily` | `ano_mes` | day | latest quote per date |
 | `gold/daily_flows` | `ano_mes` | day x peer group x FIC flag | AUM, subscriptions, redemptions, net flow |
 | `gold/returns_brl_usd` | `ano_mes` | class or subclass per day | daily return in BRL and USD |
+| `gold/anomalies` | `ano_mes` | report x anomaly type | see [docs/anomaly_detection.md](docs/anomaly_detection.md) |
 
 Every run reprocesses a window of months (default: current and previous) and checks the result
 before it counts as done. See [docs/decisions.md](docs/decisions.md) for the reasons.
@@ -109,3 +110,4 @@ MIT, see [LICENSE](LICENSE).
 - [docs/sources.md](docs/sources.md): what the source files really look like
 - [docs/decisions.md](docs/decisions.md): architecture decision records
 - [docs/setup.md](docs/setup.md): one time manual setup (Hugging Face, GitHub)
+- [docs/anomaly_detection.md](docs/anomaly_detection.md): anomaly layers, types, severity

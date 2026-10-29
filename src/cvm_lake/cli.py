@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from cvm_lake import __version__
+from cvm_lake.anomalies.report import render_alerts
 from cvm_lake.bronze import SOURCES
 from cvm_lake.config import ENVIRONMENTS, Settings, load_settings
 from cvm_lake.guard import GuardError, resolve_hf_target
@@ -71,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip downloads, rebuild silver and gold from the local bronze only",
     )
     run.add_argument("--config", type=Path, help="pipeline.yml path")
+    run.add_argument(
+        "--alerts-out",
+        type=Path,
+        help="write new high severity anomalies (Markdown) here; nothing is written on a dry "
+        "run, a failed run or when there are none",
+    )
     run.add_argument("-v", "--verbose", action="store_true")
     return parser
 
@@ -160,7 +167,16 @@ def cmd_run(args: argparse.Namespace) -> int:
                 log.error("publish: %s", exc)
                 return 1
 
-    _emit(args.env, store.repo_id if store else None, chunks)
+    repo_id = store.repo_id if store else None
+    _emit(args.env, repo_id, chunks)
+    if args.alerts_out and not args.dry_run:
+        published = [c for c in chunks if not c.report.failed and c.report.alerts]
+        if published:
+            text = "\n".join(
+                render_alerts(args.env, c.report.run_id, c.report.alerts, repo_id)
+                for c in published
+            )
+            args.alerts_out.write_text(text, encoding="utf-8")
     return 1 if any(c.report.failed for c in chunks) else 0
 
 

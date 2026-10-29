@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import io
 import json
+import math
+import random
 import shutil
 import zipfile
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -320,3 +322,125 @@ class FakeStore:
         sha = f"c{len(self.commits)}"
         self.commits.append((sha, message, list(paths)))
         return sha
+
+
+# Synthetic panel for anomaly tests ----------------------------------------------------------
+
+
+def write_silver_registry(root: Path, peers: dict[str, str]) -> None:
+    """Current registry rows only: one peer group per CNPJ, valid for all dates."""
+    rows = [
+        {
+            "cnpj": cnpj,
+            "source": "registro_classe",
+            "valid_from": date(1900, 1, 1),
+            "peer_group": peer,
+            "anbima_class": f"{peer} Livre",
+            "is_fic": False,
+        }
+        for cnpj, peer in peers.items()
+    ]
+    schema = pa.schema(
+        [
+            ("cnpj", pa.string()),
+            ("source", pa.string()),
+            ("valid_from", pa.date32()),
+            ("valid_to", pa.date32()),
+            ("peer_group", pa.string()),
+            ("cvm_class", pa.string()),
+            ("anbima_class", pa.string()),
+            ("is_fic", pa.bool_()),
+            ("class_type", pa.string()),
+            ("situation", pa.string()),
+            ("fund_cnpj", pa.string()),
+            ("adapted_on", pa.date32()),
+        ]
+    )
+    table = pa.Table.from_pylist([{f.name: r.get(f.name) for f in schema} for r in rows], schema)
+    path = root / silver.FUND_REGISTRY_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, path)
+
+
+class Panel:
+    """Seeded random walk quotas for ``n`` funds of one peer group, business days only.
+
+    Shares are constant and there are no flows, so equity = quota x shares and the accounting
+    identity holds exactly until a test breaks it.
+    """
+
+    def __init__(
+        self,
+        n: int = 30,
+        start: date = date(2026, 8, 3),
+        end: date = date(2026, 9, 30),
+        seed: int = 7,
+        peer: str = "Multimercado",
+        sigma: float = 0.004,
+    ) -> None:
+        rng = random.Random(seed)
+        self.days = [
+            start + timedelta(days=i)
+            for i in range((end - start).days + 1)
+            if (start + timedelta(days=i)).weekday() < 5
+        ]
+        self.peer = peer
+        self.funds = [f"{i + 1:014d}" for i in range(n)]
+        self.rows: dict[tuple[str, date], dict[str, object]] = {}
+        for i, cnpj in enumerate(self.funds):
+            quota, shares = 10.0, 1e5 * (i + 1)
+            for d in self.days:
+                quota *= math.exp(rng.gauss(0.0003, sigma))
+                self.rows[(cnpj, d)] = {
+                    "cnpj": cnpj,
+                    "dt": d,
+                    "quota": quota,
+                    "equity": quota * shares,
+                    "subscriptions": 0.0,
+                    "redemptions": 0.0,
+                    "shareholders": 100 + i,
+                }
+
+    def day(self, iso: str) -> date:
+        d = date.fromisoformat(iso)
+        assert d in self.days, f"{iso} is not a business day of the panel"
+        return d
+
+    def after(self, d: date, n: int = 1) -> date:
+        return self.days[self.days.index(d) + n]
+
+    def set(self, i: int, iso: str, **values: object) -> None:
+        self.rows[(self.funds[i], self.day(iso))].update(values)
+
+    def scale(self, i: int, iso: str, factor: float, fields: tuple[str, ...] = ("quota", "equity"),
+              until: str | None = None) -> None:  # fmt: skip
+        """Multiply ``fields`` from ``iso`` on (to ``until`` inclusive, default: the end)."""
+        first, last = self.day(iso), self.day(until) if until else self.days[-1]
+        for d in self.days:
+            if first <= d <= last:
+                row = self.rows[(self.funds[i], d)]
+                for f in fields:
+                    row[f] = row[f] * factor  # type: ignore[operator]
+
+    def drop(self, i: int, *isos: str) -> None:
+        for iso in isos:
+            del self.rows[(self.funds[i], self.day(iso))]
+
+    def write(self, root: Path) -> None:
+        by_month: dict[str, list[dict[str, object]]] = {}
+        for row in self.rows.values():
+            r = dict(row)
+            d = r["dt"]
+            assert isinstance(d, date)
+            for k, digits in (
+                ("quota", 12),
+                ("equity", 2),
+                ("subscriptions", 2),
+                ("redemptions", 2),
+            ):
+                v = r[k]
+                r[k] = None if v is None else f"{v:.{digits}f}"
+            by_month.setdefault(f"{d:%Y%m}", []).append(r)
+        for ym, rows in by_month.items():
+            write_silver_fund_daily(root, ym, rows)
+        write_silver_registry(root, dict.fromkeys(self.funds, self.peer))

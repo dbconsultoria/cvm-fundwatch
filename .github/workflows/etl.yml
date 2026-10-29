@@ -94,6 +94,9 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     environment: ${{ matrix.env }}
+    permissions:
+      contents: read
+      issues: write # alerts for new high severity anomalies (prod only)
     concurrency:
       group: etl-${{ matrix.env }}
       cancel-in-progress: false
@@ -121,7 +124,7 @@ jobs:
 
       - name: Run pipeline
         run: |
-          args=(run --env "$ENV_NAME" --target hf --out lake)
+          args=(run --env "$ENV_NAME" --target hf --out lake --alerts-out alerts.md)
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           if [ -n "$MONTHS" ]; then
             args+=(--months "$MONTHS")
@@ -129,6 +132,24 @@ jobs:
             args+=(--lookback "$LOOKBACK")
           fi
           uv run --no-dev cvm-lake "${args[@]}"
+
+      - name: Open or update the alerts issue
+        if: success() && matrix.env == 'prod' && hashFiles('alerts.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # one issue per month; every run with new findings adds a comment
+          export TITLE="[prod] High severity anomalies $(date -u +%Y-%m)"
+          gh label create anomaly-alert --color B60205 --force \
+            --description "New high severity anomalies"
+          number=$(gh issue list --label anomaly-alert --state open --limit 50 \
+            --json number,title --jq '.[] | select(.title == env.TITLE) | .number' | head -n1)
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file alerts.md
+          else
+            gh issue create --title "$TITLE" --label anomaly-alert --body-file alerts.md
+          fi
 
       - name: Keep dry run output
         if: always() && env.DRY_RUN == 'true'

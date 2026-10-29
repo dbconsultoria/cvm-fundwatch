@@ -1,4 +1,4 @@
-"""One pipeline run: bronze -> silver -> gold -> quality checks.
+"""One pipeline run: bronze -> silver -> gold -> anomalies -> quality checks.
 
 Silver and gold are rebuilt for every month of the window that has bronze locally. That is cheap
 (seconds per month) and keeps every run idempotent.
@@ -12,6 +12,9 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from cvm_lake import bronze, gold, quality, silver
+from cvm_lake.anomalies.detector import AnomalyStats, detect_month
+from cvm_lake.anomalies.report import Alert, select_alerts
+from cvm_lake.anomalies.settings import AnomalyConfig, load_anomaly_config
 from cvm_lake.bronze import BronzeRun, PartitionResult
 from cvm_lake.config import Settings
 from cvm_lake.db import connect
@@ -33,6 +36,8 @@ class RunReport:
     registry: silver.RegistryStats | None = None
     ptax: list[silver.PtaxStats] = field(default_factory=list)
     gold: list[gold.GoldStats] = field(default_factory=list)
+    anomalies: list[AnomalyStats] = field(default_factory=list)
+    alerts: list[Alert] = field(default_factory=list)
     checks: list[CheckResult] = field(default_factory=list)
 
     @property
@@ -52,8 +57,10 @@ def run_pipeline(
     client: HttpClient | None,
     work_dir: Path,
     force: bool = False,
+    anomaly_config: AnomalyConfig | None = None,
 ) -> RunReport:
     report = RunReport(run_id=run_id, months=months)
+    anomaly_cfg = anomaly_config or load_anomaly_config()
     if client is not None and sources:
         report.bronze = BronzeRun(
             settings=settings,
@@ -93,6 +100,12 @@ def run_pipeline(
         gold_stats = gold.build_month(con, root, ym)
         report.gold.append(gold_stats)
         report.checks += quality.check_gold(gold_stats, cfg)
+
+    for ym in built:
+        anomaly_stats = detect_month(con, root, ym, anomaly_cfg, run_id)
+        report.anomalies.append(anomaly_stats)
+        report.checks += quality.check_anomalies(con, root, anomaly_stats)
+    report.alerts = select_alerts(con, root, built, run_id, today, anomaly_cfg)
     con.close()
 
     if report.failed:
@@ -147,6 +160,12 @@ def format_report(report: RunReport) -> str:
             f"  {g.month}  daily_flows {g.daily_flows_rows:,} rows  returns {g.returns_rows:,} rows"
             f"  peer coverage {g.peer_coverage:.2%}"
         )
+    lines.append("")
+    lines.append("ANOMALIES")
+    for a in report.anomalies:
+        sev = ", ".join(f"{k} {v}" for k, v in sorted(a.by_severity.items()))
+        lines.append(f"  {a.month}  {a.rows:,} rows ({sev})  new high {a.new_high}")
+    lines.append(f"  alerts: {len(report.alerts)}")
     lines.append("")
     failed = [c for c in report.checks if not c.passed]
     lines.append(

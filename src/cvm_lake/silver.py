@@ -70,17 +70,17 @@ class FundDailyStats:
     duplicates_removed: int  # same (cnpj, subclass_id, dt) more than once, last row kept
 
 
-def build_fund_daily(con: duckdb.DuckDBPyConnection, root: Path, ym: str) -> FundDailyStats:
-    src = root / bronze.inf_diario_path(ym)
+def bronze_layout(con: duckdb.DuckDBPyConnection, src: Path) -> str:
     layouts = [r[0] for r in con.execute(f"SELECT DISTINCT _layout FROM {lit(src)}").fetchall()]
     if len(layouts) != 1 or layouts[0] not in LAYOUT_COLUMNS:
         raise SchemaError(f"{src}: expected one known layout, found {layouts}")
-    layout = layouts[0]
-    cnpj_col, subclass_expr, type_expr = LAYOUT_COLUMNS[layout]
-    start, end = month_bounds(ym)
+    return layouts[0]
 
-    con.execute(f"""
-        CREATE OR REPLACE TEMP TABLE fd_typed AS
+
+def typed_bronze_sql(src: Path, layout: str) -> str:
+    """Bronze rows typed with the silver names, plus ``source_row`` and ``unparseable``."""
+    cnpj_col, subclass_expr, type_expr = LAYOUT_COLUMNS[layout]
+    return f"""
         SELECT
             {normalize_cnpj_sql(cnpj_col)} AS cnpj,
             {subclass_expr} AS subclass_id,
@@ -102,7 +102,14 @@ def build_fund_daily(con: duckdb.DuckDBPyConnection, root: Path, ym: str) -> Fun
               OR (RESG_DIA <> '' AND redemptions IS NULL)
               OR (NR_COTST <> '' AND shareholders IS NULL) AS unparseable
         FROM read_parquet({lit(src)}, file_row_number = true)
-    """)
+    """
+
+
+def build_fund_daily(con: duckdb.DuckDBPyConnection, root: Path, ym: str) -> FundDailyStats:
+    src = root / bronze.inf_diario_path(ym)
+    layout = bronze_layout(con, src)
+    start, end = month_bounds(ym)
+    con.execute(f"CREATE OR REPLACE TEMP TABLE fd_typed AS {typed_bronze_sql(src, layout)}")
     total, unparseable, in_month = one(
         con,
         f"""
