@@ -31,17 +31,16 @@ Hugging Face and summarized here. Nothing in between is a server or a database.
 
 ```js
 const repo = meta.repo_id;
-```
-
-${repo
+display(repo
   ? html`<p>Dataset: <a href="https://huggingface.co/datasets/${repo}">huggingface.co/datasets/${repo}</a>.
-  Every table can be queried there in the dataset viewer and the SQL console, or from DuckDB:</p>
-  <pre><code>SELECT * FROM read_parquet('hf://datasets/${repo}/gold/daily_flows/*/*.parquet',
+      Every table can be queried there in the dataset viewer and the SQL console, or from DuckDB:</p>
+    <pre><code>SELECT * FROM read_parquet('hf://datasets/${repo}/gold/daily_flows/*/*.parquet',
                            hive_partitioning = true)
 LIMIT 10;</code></pre>
-  <iframe src="https://huggingface.co/datasets/${repo}/embed/viewer/daily_flows/train"
-    frameborder="0" width="100%" height="560px" title="Dataset viewer"></iframe>`
-  : html`<p class="muted">Built from local data.</p>`}
+    <iframe src="https://huggingface.co/datasets/${repo}/embed/viewer/daily_flows/train"
+      frameborder="0" width="100%" height="560" title="Dataset viewer"></iframe>`
+  : html`<p class="muted">Built from local data, not from a Hugging Face dataset.</p>`);
+```
 
 Methodology, architecture and decisions:
 [github.com/dbconsultoria/cvm-fundwatch](https://github.com/dbconsultoria/cvm-fundwatch).

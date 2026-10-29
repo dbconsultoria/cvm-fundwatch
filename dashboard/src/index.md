@@ -18,11 +18,14 @@ const brl = (x) =>
   Math.abs(x) >= 1e12 ? `R$ ${(x / 1e12).toFixed(2)} tri` :
   Math.abs(x) >= 1e9 ? `R$ ${(x / 1e9).toFixed(1)} bi` :
   `R$ ${(x / 1e6).toFixed(1)} mi`;
-const months = [...new Set(aum.map((d) => d.month))].sort();
+// typed CSV turns "2026-10" into a Date: compare months as "YYYY-MM" strings, not as objects
+const monthKey = d3.utcFormat("%Y-%m");
+const months = [...new Set(aum.map((d) => monthKey(d.month)))].sort();
 const lastMonth = months.at(-1);
 const prevMonth = months.at(-2);
-const total = (m, fic) => d3.sum(aum.filter((d) => d.month === m && d.is_fic === fic), (d) => d.aum);
-const lastFlows = d3.sum(flows.filter((d) => d.month === prevMonth), (d) => d.net_flow);
+const total = (m, fic) =>
+  d3.sum(aum.filter((d) => monthKey(d.month) === m && d.is_fic === fic), (d) => d.aum);
+const lastFlows = d3.sum(flows.filter((d) => monthKey(d.month) === prevMonth), (d) => d.net_flow);
 ```
 
 <p class="muted">Daily reports of investment funds registered with CVM, last complete date
@@ -83,7 +86,7 @@ display(Plot.plot({
   y: {grid: true, label: "R$ billion", transform: (d) => d / 1e9},
   color: {legend: true},
   marks: [
-    Plot.rectY(flows, {x: (d) => new Date(d.month + "-01"), interval: "month", y: "net_flow",
+    Plot.rectY(flows, {x: "month", interval: "month", y: "net_flow",
                        fill: "peer_group", tip: true}),
     Plot.ruleY([0])
   ]
