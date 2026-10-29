@@ -30,3 +30,19 @@ sources:
 http:
   timeout_seconds: 120
   max_attempts: 5
+
+# CVM class (pre and post 175) -> peer group (ADR 0017). Unlisted non-empty values -> "Outros".
+peer_groups:
+  "Renda Fixa": "Renda Fixa"
+  "Referenciado": "Renda Fixa"
+  "Curto Prazo": "Renda Fixa"
+  "Dívida Externa": "Renda Fixa"
+  "Ações": "Ações"
+  "Multimercado": "Multimercado"
+  "Cambial": "Cambial"
+  "FMP-FGTS": "FMP-FGTS"
+
+quality:
+  max_row_drop_pct: 20          # silver partition may not shrink more than this vs the last run
+  max_invalid_value_share: 0.05 # equity < 0 or quota <= 0 per partition (real: 0.2% to 2.1%)
+  min_peer_coverage: 0.95       # warn when fewer rows than this get a peer group

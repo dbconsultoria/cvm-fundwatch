@@ -140,3 +140,84 @@ Short ADR style entries. Status is `accepted`, `proposed` (waiting for review) o
     a source change and needs a human.
 - Consequence: an outage turns the run yellow (warnings), never red. A schema change turns it
   red.
+
+## 0016 Silver fund_daily typing and cleaning
+
+- Status: accepted
+- Decision:
+  - Columns: `cnpj`, `subclass_id`, `dt`, `report_type`, `portfolio_value`, `quota`,
+    `equity`, `subscriptions`, `redemptions`, `shareholders`, `source_layout`,
+    `source_sha256`. `cnpj` is the fund CNPJ before 175 and the class CNPJ after it (the same
+    value for 99.6% of classes), so one key spans both eras.
+  - Money is `DECIMAL(38,2)`, quota `DECIMAL(38,12)`, no floats. 38 digits leaves room for
+    decimal shift errors (x1000) that the anomaly layer has to see, not a cast failure.
+  - Empty source fields become NULL. A non empty value that does not cast is counted and fails
+    the run (quality check `parseable_values`); none exist in the inspected months.
+  - Rows dated outside the partition month are dropped and reported (warning).
+  - Duplicate `(cnpj, subclass_id, dt)`: the last row in the source file wins, reported.
+  - Weekend and holiday rows (seen in 2005) are kept; they are data, the anomaly layer decides.
+- Consequence: one schema for the three layouts, enforced by a test and a runtime check.
+
+## 0017 Peer group
+
+- Status: accepted
+- Context: the anomaly detection compares a fund with its peers on the same day.
+- Decision:
+  - Peer group = CVM class, mapped by `peer_groups` in `config/pipeline.yml`. Legacy
+    `Referenciado`, `Curto Prazo` and `Divida Externa` become `Renda Fixa` (they are Renda
+    Fixa subtypes since ICVM 555). Unlisted values become `Outros`, missing ones
+    `Nao classificado`.
+  - `silver/fund_registry` holds intervals: `cad_fi_hist` rows (legacy history, cut at the
+    fund's adaptation date) and one `registro_classe` row per class (valid from the
+    adaptation date).
+  - Precedence for a fund and date: legacy class valid on that date, then the earliest legacy
+    class when the date is before the history starts (`cad_fi_hist_backfill`; most history
+    starts in 2005), then the current class. `peer_source` records which one was used.
+  - The ANBIMA classification and the FIC flag come from the current registry only and are
+    carried along for later use (finer peers, FIC double counting).
+- Consequence: coverage measured on real data: 95.9% (2005-01), 99.9% (2020-03),
+  99.95% (2023-09), 99.8% (2026-10). Coverage below 95% is a warning.
+- Registry duplicates (real): `registro_classe` repeats 13 CNPJs and `registro_fundo` repeats
+  ids. Rule: not cancelled first, then the latest `Data_Registro`, then the highest id.
+
+## 0018 Write Parquet through Arrow, not DuckDB COPY
+
+- Status: accepted
+- Context: DuckDB 2 marks a Parquet column `NOT NULL` when the data has no nulls, so
+  partitions of one table got different schemas. DuckDB 2 also keeps a connection busy after
+  a partial fetch (`fetchone`), which breaks the next query.
+- Decision: queries are materialized with `to_arrow_table()`, every field made nullable (and
+  cast to the declared schema where there is one) and written with `pyarrow`. Single row reads
+  go through `db.one()`, which uses `fetchall`.
+- Consequence: identical schema in every partition (verified on real data). Months are small
+  enough (about 600k rows) to fit in memory on a runner.
+
+## 0019 Silver and gold are rebuilt for the whole window on every run
+
+- Status: accepted
+- Decision: every month of the run window that has bronze is rebuilt in silver and gold, even
+  if bronze did not change. Gold for month M reads silver M-1 for the previous quota and PTAX.
+  The registry is rebuilt from the latest snapshot every run.
+- Consequence: about 4 seconds per month, no change tracking between layers, and a rerun gives
+  the same result. A registry change only reaches gold months inside the window; a full
+  history refresh is a backfill run.
+
+## 0020 Quality gate
+
+- Status: accepted
+- Decision: checks run on the written files. Blocking: schema, unique key, parseable values,
+  row count drop vs the last accepted run (20%), share of negative equity or quota <= 0 (5%),
+  registry key and encoding, PTAX unique date and rates, gold AUM equal to silver AUM.
+  Warnings: rows dropped as out of month or duplicates, peer coverage below 95%. Any blocking
+  failure exits with code 1 and the manifest keeps the previous silver row counts.
+- Consequence: thresholds come from real data: the invalid share is 0.2% to 0.35% in recent
+  months and 2.1% in 2005-01 (mostly quota = 0).
+
+## 0021 The latest dates of a month are incomplete
+
+- Status: accepted (to be handled in Phases 4 and 7)
+- Context: on 2026-10-29 the file had 25,097 classes for 10-23, 23,770 for 10-27 and 28 for
+  10-28. Funds report with a lag.
+- Decision: gold keeps every date as reported, with `n_classes` per row. The reporting layer
+  must flag recent dates with a low class count, and the anomaly layer must not treat a report
+  that has not arrived yet as a gap.

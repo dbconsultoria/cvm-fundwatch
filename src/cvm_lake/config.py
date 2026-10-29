@@ -26,12 +26,21 @@ class EnvironmentConfig:
 
 
 @dataclass(frozen=True)
+class QualityConfig:
+    max_row_drop_pct: float
+    max_invalid_value_share: float
+    min_peer_coverage: float
+
+
+@dataclass(frozen=True)
 class Settings:
     environment: EnvironmentConfig
     lookback_months: int
     sources: Mapping[str, Mapping[str, Any]]
     http_timeout_seconds: float
     http_max_attempts: int
+    peer_groups: Mapping[str, str]
+    quality: QualityConfig
 
     def source(self, name: str) -> Mapping[str, Any]:
         try:
@@ -62,8 +71,14 @@ def load_settings(env: str, path: Path | None = None) -> Settings:
             sources=raw["sources"],
             http_timeout_seconds=float(raw["http"]["timeout_seconds"]),
             http_max_attempts=int(raw["http"]["max_attempts"]),
+            peer_groups={str(k): str(v) for k, v in raw["peer_groups"].items()},
+            quality=QualityConfig(
+                max_row_drop_pct=float(raw["quality"]["max_row_drop_pct"]),
+                max_invalid_value_share=float(raw["quality"]["max_invalid_value_share"]),
+                min_peer_coverage=float(raw["quality"]["min_peer_coverage"]),
+            ),
         )
-    except (KeyError, TypeError) as exc:
+    except (KeyError, TypeError, AttributeError) as exc:
         raise ConfigError(f"invalid config {path}: missing {exc}") from exc
 
     if settings.lookback_months < 1:

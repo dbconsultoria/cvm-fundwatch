@@ -100,6 +100,11 @@ From `meta_inf_diario_fi.txt` (which documents only the `v2` names) and observed
   202610). Class totals must be computed by summing subclasses.
 - Monthly zip is about 10 to 12 MB, CSV about 45 to 55 MB uncompressed.
 
+### Reporting lag
+
+The newest dates in a file are incomplete. The 202610 file downloaded on 2026-10-29 had
+25,097 classes on 10-23, 24,796 on 10-26, 23,770 on 10-27 and 28 on 10-28 (ADR 0021).
+
 ### Refresh behaviour (from `Last-Modified`)
 
 Observed on 2026-10-29 (BRT = UTC-3):
@@ -131,8 +136,16 @@ Key points:
 
 - Daily reports use formatted CNPJ, registry B uses digits only. Silver will store the 14 digit
   form. No alphanumeric CNPJ seen yet in any file, but the column stays a string (ADR 0006).
-- Old classes `Referenciado`, `Curto Prazo` and `Divida Externa` do not exist post 175. A mapping
-  to a common peer group is needed (Phase 2).
+- Old classes `Referenciado`, `Curto Prazo` and `Divida Externa` do not exist post 175. They
+  are mapped to `Renda Fixa` (ADR 0017).
+- `registro_classe` repeats 13 CNPJs (some rows are exact copies, others a cancelled and an
+  active registration). `registro_fundo` repeats 8,166 CNPJs and even some `ID_Registro_Fundo`.
+- `cad_fi_hist_classe` has 56 overlapping intervals for the same CNPJ, no empty start dates,
+  and most histories start in 2005 (first interval in 2004 for only 248 CNPJs).
+- `registro_classe.CNPJ_Classe` equals the parent `registro_fundo.CNPJ_Fundo` for 37,612 of
+  37,762 classes, so the pre 175 fund CNPJ in the daily reports joins to the post 175 class.
+- 9,443 of the 25,323 classes reporting in 202610 are FIC (`Classe_Cotas = S`), so summed AUM
+  double counts money invested through funds of funds.
 
 **Decision (ADR 0008):** use **B** (`registro_classe.Classificacao`) as the
 current peer group and **C** (`cad_fi_hist_classe.csv`) for dates before a fund adapted to 175
@@ -161,3 +174,5 @@ history of B. Drop A.
   Silver keeps one row per date (latest timestamp).
 - No `Last-Modified` or `ETag` headers. Change detection must use content hashing.
 - Parse decimals as strings in bronze to avoid float rounding.
+- Large moves exist in the data as published: 5.0377 on 2026-10-23, 5.5007 on 2026-10-26,
+  5.3346 on 2026-10-27 (sell rate). The pipeline keeps them as is.

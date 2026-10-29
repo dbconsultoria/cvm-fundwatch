@@ -7,16 +7,16 @@ import logging
 import os
 import sys
 import tempfile
-from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
 from cvm_lake import __version__
-from cvm_lake.bronze import SOURCES, BronzeRun, PartitionResult
+from cvm_lake.bronze import SOURCES
 from cvm_lake.config import ENVIRONMENTS, load_settings
 from cvm_lake.http import HttpClient
 from cvm_lake.manifest import MANIFEST_NAME, Manifest
 from cvm_lake.periods import lookback_months, parse_months, today_brt
+from cvm_lake.pipeline import format_report, run_pipeline
 
 log = logging.getLogger("cvm_lake")
 
@@ -54,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--sources", type=_sources_arg, default=set(SOURCES), help=f"comma list of {SOURCES}"
     )
     run.add_argument("--force", action="store_true", help="ignore the manifest, rebuild all")
+    run.add_argument(
+        "--no-extract",
+        action="store_true",
+        help="skip downloads, rebuild silver and gold from the local bronze only",
+    )
     run.add_argument("--config", type=Path, help="pipeline.yml path")
     run.add_argument("-v", "--verbose", action="store_true")
     return parser
@@ -66,16 +71,6 @@ def default_run_id() -> str:
     return "local-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def format_summary(results: list[PartitionResult]) -> str:
-    lines = [f"{'source':16} {'partition':22} {'status':14} {'rows':>9}  detail"]
-    for r in results:
-        rows = "" if r.rows is None else f"{r.rows:,}"
-        lines.append(f"{r.source:16} {r.partition:22} {r.status:14} {rows:>9}  {r.detail}")
-    counts = Counter(r.status.value for r in results)
-    lines.append("totals: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
-    return "\n".join(lines)
-
-
 def cmd_run(args: argparse.Namespace) -> int:
     settings = load_settings(args.env, args.config)
     today = today_brt()
@@ -84,7 +79,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     root: Path = args.out
     manifest_path = root / MANIFEST_NAME
     manifest = Manifest.load(manifest_path)
-    log.info("run %s env=%s months=%s sources=%s", run_id, args.env, months, sorted(args.sources))
+    sources = set() if args.no_extract else args.sources
+    log.info("run %s env=%s months=%s sources=%s", run_id, args.env, months, sorted(sources))
 
     with (
         HttpClient(
@@ -92,23 +88,24 @@ def cmd_run(args: argparse.Namespace) -> int:
         ) as client,
         tempfile.TemporaryDirectory(prefix="cvm-lake-") as work,
     ):
-        run = BronzeRun(
-            settings=settings,
-            root=root,
-            client=client,
-            manifest=manifest,
-            run_id=run_id,
-            today=today,
-            work_dir=Path(work),
-            force=args.force,
-        )
         try:
-            results = run.run(months, args.sources)
+            report = run_pipeline(
+                settings=settings,
+                root=root,
+                manifest=manifest,
+                run_id=run_id,
+                today=today,
+                months=months,
+                sources=sources,
+                client=client,
+                work_dir=Path(work),
+                force=args.force,
+            )
         finally:
             manifest.save(manifest_path)
 
-    print(format_summary(results))
-    return 0
+    print(format_report(report))
+    return 1 if report.failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:

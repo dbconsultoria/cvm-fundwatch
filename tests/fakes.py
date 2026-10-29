@@ -11,11 +11,19 @@ import io
 import json
 import zipfile
 from dataclasses import dataclass, field
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
 
 import httpx
+import pyarrow as pa
+import pyarrow.parquet as pq
 from tenacity import wait_none
 
+from cvm_lake import bronze, silver
 from cvm_lake.http import HttpClient
+from cvm_lake.sources import bcb_ptax, cvm_inf_diario
+from cvm_lake.sources._csv import read_csv_as_strings
 
 CVM = "https://dados.cvm.gov.br/dados"
 INF_MONTHLY = CVM + "/FI/DOC/INF_DIARIO/DADOS/inf_diario_fi_{}.zip"
@@ -204,3 +212,62 @@ class FakeServer:
     def count(self, method: str, url: str) -> int:
         key = self._key(url)
         return sum(1 for m, u in self.calls if m == method and u == key)
+
+
+# Lake builders --------------------------------------------------------------------------------
+
+
+def write_bronze_inf(root: Path, ym: str, lines: list[str]) -> None:
+    """Bronze inf_diario partition exactly as the bronze layer writes it."""
+    zip_path = root.parent / f"src-{ym}.zip"
+    zip_path.write_bytes(inf_monthly_zip(ym, lines))
+    ex = cvm_inf_diario.extract_month(zip_path, ym, encoding="latin-1", delimiter=";")
+    table = bronze.with_source_metadata(
+        ex.table,
+        {
+            "_layout": ex.layout,
+            "_source_url": "u",
+            "_source_member": ex.member,
+            "_source_last_modified": None,
+            "_source_sha256": "sha",
+        },
+    )
+    bronze.write_parquet(table, root, bronze.inf_diario_path(ym))
+
+
+def write_bronze_registry(
+    root: Path, table: str, lines: list[str], snapshot: str = "2026-10-29"
+) -> None:
+    data = read_csv_as_strings(csv_bytes(lines), encoding="latin-1", delimiter=";")
+    path = bronze.registry_path(table, date.fromisoformat(snapshot))
+    bronze.write_parquet(data, root, path)
+
+
+def write_bronze_ptax(root: Path, ym: str, body: bytes) -> None:
+    rows = bcb_ptax.parse_response(body)
+    bronze.write_parquet(bcb_ptax.to_table(rows), root, bronze.ptax_path(ym))
+
+
+def write_silver_fund_daily(root: Path, ym: str, rows: list[dict[str, object]]) -> None:
+    """Silver rows with defaults; values given as str are converted to Decimal."""
+    defaults: dict[str, object] = {
+        "subclass_id": "",
+        "report_type": "CLASSES - FIF",
+        "portfolio_value": None,
+        "subscriptions": "0",
+        "redemptions": "0",
+        "shareholders": 1,
+        "source_layout": "v2",
+        "source_sha256": "sha",
+    }
+    full = []
+    for row in rows:
+        r = {**defaults, **row}
+        for k in ("portfolio_value", "quota", "equity", "subscriptions", "redemptions"):
+            if isinstance(r[k], str):
+                r[k] = Decimal(r[k])
+        full.append(r)
+    table = pa.Table.from_pylist(full, schema=silver.FUND_DAILY_SCHEMA)
+    path = root / silver.fund_daily_path(ym)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, path)
