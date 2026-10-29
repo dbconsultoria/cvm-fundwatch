@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.token
+
+# Local lake output and downloaded raw data (never committed)
+data/
+lake/
+_out/
+*.zip
+*.parquet
+!tests/fixtures/**/*.parquet
+
+# Dashboard build
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.observablehq/cache/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

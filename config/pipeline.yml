@@ -1,0 +1,32 @@
+# Pipeline configuration. Secrets never live here; tokens come from the environment (HF_TOKEN).
+environments:
+  dev:
+    hf_dataset_repo: "<HF_USER>/cvm-fundos-lake-dev"   # private
+    hf_model_repo: "<HF_USER>/cvm-fundos-anomaly-dev"  # private
+    branch: development
+  prod:
+    hf_dataset_repo: "<HF_USER>/cvm-fundos-lake"       # public
+    hf_model_repo: "<HF_USER>/cvm-fundos-anomaly"      # public
+    branch: main
+
+window:
+  lookback_months: 2          # daily run reprocesses M and M-1 (ADR 0009)
+
+sources:
+  cvm_inf_diario:
+    monthly_url: "https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/inf_diario_fi_{yyyymm}.zip"
+    yearly_hist_url: "https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/HIST/inf_diario_fi_{yyyy}.zip"
+    encoding: latin-1
+    delimiter: ";"
+  cvm_registry:            # ADR 0008
+    archives:
+      registro_fundo_classe: "https://dados.cvm.gov.br/dados/FI/CAD/DADOS/registro_fundo_classe.zip"
+      cad_fi_hist: "https://dados.cvm.gov.br/dados/FI/CAD/DADOS/cad_fi_hist.zip"
+    encoding: latin-1
+    delimiter: ";"
+  bcb_ptax:
+    base_url: "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata"
+
+http:
+  timeout_seconds: 120
+  max_attempts: 5
