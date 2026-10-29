@@ -221,3 +221,74 @@ Short ADR style entries. Status is `accepted`, `proposed` (waiting for review) o
 - Decision: gold keeps every date as reported, with `n_classes` per row. The reporting layer
   must flag recent dates with a low class count, and the anomaly layer must not treat a report
   that has not arrived yet as a gap.
+
+## 0022 Environment guard
+
+- Status: accepted
+- Decision: before any download, the `hf` target checks:
+  - `HF_OWNER` and `HF_TOKEN` are set. The repo id is built from `config/pipeline.yml`
+    (`{owner}/cvm-fundos-lake-dev` or `{owner}/cvm-fundos-lake`), so no repo name lives in a
+    secret or in code.
+  - Dev targets a repo ending in `-dev`, prod a repo that does not.
+  - In GitHub Actions, the job's Environment declares `CVM_LAKE_ENV` and it must equal
+    `--env`; prod also requires `GITHUB_REF = refs/heads/main`.
+  - Remote: the repo exists for this token, dev is private and prod is public.
+- Consequence: a prod token in the dev job, a dev run pointed at prod or a prod repo made
+  private all stop the run with exit code 2, before any work. Fine grained tokens (one per
+  repo) are the last line of defence.
+
+## 0023 One atomic commit per run chunk
+
+- Status: accepted
+- Decision:
+  - A run reads the repo head once, downloads every input at that revision and commits with
+    `parent_commit` set to it. If anything else committed meanwhile, the commit fails and
+    nothing is half written. `concurrency: etl-<env>` in the workflow prevents that in the
+    first place.
+  - Inputs downloaded: `_manifest.json`, bronze of the window months (to rebuild silver when the
+    source did not change), silver of the month before the window, the latest registry
+    snapshot. Nothing else.
+  - The commit holds the files written by the run, the manifest and the dataset card. Files
+    whose bytes did not change are skipped by `huggingface_hub`.
+  - A backfill is split into chunks of 12 months, one commit each, so a commit stays under 95
+    files. A chunk that fails quality stops the backfill; earlier chunks stay published, each
+    one complete.
+- Consequence: a daily run is one commit of up to about 20 files. A full history backfill
+  (2000 to today) is about 27 commits of up to about 80 files each.
+
+## 0024 Commit sha in the manifest
+
+- Status: accepted
+- Context: a commit cannot contain its own sha.
+- Decision: commits are titled `run <run_id>`. At the start of the next run, entries written
+  by the run named in the head commit get that head sha as `commit_sha`.
+- Consequence: Phase 5 can read the previous revision of a partition with
+  `hf://datasets/<repo>@<commit_sha>/...`.
+
+## 0025 Approval for manual prod runs
+
+- Status: accepted
+- Context: required reviewers on an Environment apply to every job that uses it, scheduled ones
+  included. Putting them on `prod` would block the daily run until someone clicks approve.
+- Decision: `prod` (main only, holds the token) has no reviewers. A manual prod run that is not
+  a dry run first passes a job bound to a separate `prod-approval` environment that has
+  required reviewers and no secrets.
+- Consequence: the schedule runs unattended; a human approves every manual write to prod.
+
+## 0026 Keepalive without commits
+
+- Status: accepted (verify after the first 60 days)
+- Context: GitHub disables scheduled workflows of public repos after 60 days without activity.
+  A dummy commit to `main` would be blocked by branch protection.
+- Decision: a monthly workflow calls the "enable workflow" API for `etl.yml` and itself, with
+  `actions: write` only. This is the approach of the widely used keepalive actions.
+- Consequence: no bot commits. If GitHub still disables the schedule, fall back to a commit
+  to an unprotected branch.
+
+## 0027 Dry run output
+
+- Status: accepted
+- Decision: a dry run reads the real repo, builds everything and uploads the local lake as an
+  Actions artifact kept for 7 days. Manual dispatches default to dry run.
+- Consequence: artifacts of a public GitHub repo can be downloaded by any signed in user. That
+  includes dev data, which is acceptable because every byte comes from public sources.

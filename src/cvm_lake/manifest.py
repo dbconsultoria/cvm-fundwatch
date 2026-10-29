@@ -38,6 +38,19 @@ class Manifest:
     def put(self, source: str, partition: str, entry: ManifestEntry) -> None:
         self.entries[self.key(source, partition)] = entry
 
+    def stamp_commit(self, run_id: str, sha: str) -> int:
+        """Record ``sha`` on the entries written by ``run_id`` (ADR 0024).
+
+        A commit cannot contain its own sha, so the next run fills it in from the repo head.
+        Returns the number of entries stamped.
+        """
+        stamped = 0
+        for entry in self.entries.values():
+            if entry.run_id == run_id and entry.commit_sha is None:
+                entry.commit_sha = sha
+                stamped += 1
+        return stamped
+
     @classmethod
     def load(cls, path: Path) -> Manifest:
         if not path.exists():

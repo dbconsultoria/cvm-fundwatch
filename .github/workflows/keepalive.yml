@@ -1,0 +1,29 @@
+name: keepalive
+
+# GitHub disables scheduled workflows of a public repo after 60 days without repository
+# activity. The ETL commits to Hugging Face, not to GitHub, so this re-enables the scheduled
+# workflows through the API once a month instead of pushing a dummy commit, which branch
+# protection on main would block anyway (ADR 0026).
+
+on:
+  schedule:
+    - cron: "41 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Re-enable scheduled workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          for wf in etl.yml keepalive.yml; do
+            gh api --method PUT "repos/$REPO/actions/workflows/$wf/enable"
+            echo "enabled $wf"
+          done

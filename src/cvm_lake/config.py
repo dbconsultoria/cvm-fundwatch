@@ -26,6 +26,12 @@ class EnvironmentConfig:
 
 
 @dataclass(frozen=True)
+class PublishConfig:
+    max_months_per_commit: int
+    max_files_per_commit: int
+
+
+@dataclass(frozen=True)
 class QualityConfig:
     max_row_drop_pct: float
     max_invalid_value_share: float
@@ -41,6 +47,7 @@ class Settings:
     http_max_attempts: int
     peer_groups: Mapping[str, str]
     quality: QualityConfig
+    publish: PublishConfig
 
     def source(self, name: str) -> Mapping[str, Any]:
         try:
@@ -77,6 +84,10 @@ def load_settings(env: str, path: Path | None = None) -> Settings:
                 max_invalid_value_share=float(raw["quality"]["max_invalid_value_share"]),
                 min_peer_coverage=float(raw["quality"]["min_peer_coverage"]),
             ),
+            publish=PublishConfig(
+                max_months_per_commit=int(raw["publish"]["max_months_per_commit"]),
+                max_files_per_commit=int(raw["publish"]["max_files_per_commit"]),
+            ),
         )
     except (KeyError, TypeError, AttributeError) as exc:
         raise ConfigError(f"invalid config {path}: missing {exc}") from exc
@@ -85,4 +96,6 @@ def load_settings(env: str, path: Path | None = None) -> Settings:
         raise ConfigError("window.lookback_months must be >= 1")
     if settings.http_max_attempts < 1:
         raise ConfigError("http.max_attempts must be >= 1")
+    if settings.publish.max_months_per_commit < 1:
+        raise ConfigError("publish.max_months_per_commit must be >= 1")
     return settings

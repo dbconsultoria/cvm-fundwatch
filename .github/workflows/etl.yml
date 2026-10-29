@@ -1,0 +1,140 @@
+name: etl
+
+on:
+  schedule:
+    # Mon to Fri: current and previous month. Saturday: 13 month lookback to pick up
+    # restatements (ADR 0009). After the CVM refresh (~00:50 BRT) and PTAX (~13:10 BRT).
+    - cron: "23 17 * * 1-5"
+    - cron: "23 17 * * 6"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target lake
+        type: choice
+        options: [dev, prod]
+        default: dev
+      dry_run:
+        description: Build everything, publish nothing (outputs kept as an artifact for 7 days)
+        type: boolean
+        default: true
+      months:
+        description: "Backfill months, e.g. 202301-202412. Empty: lookback window"
+        type: string
+        default: ""
+      lookback:
+        description: "Months back from today when months is empty. Empty: config default"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      lookback: ${{ steps.plan.outputs.lookback }}
+      needs_approval: ${{ steps.plan.outputs.needs_approval }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_ENV: ${{ inputs.environment }}
+          INPUT_LOOKBACK: ${{ inputs.lookback }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # Scheduled workflows only run on the default branch, so one schedule drives both
+          # lakes: each job checks out the branch of its environment.
+          dev='{"env":"dev","branch":"development"}'
+          prod='{"env":"prod","branch":"main"}'
+          needs_approval=false
+          if [ "$EVENT" = "schedule" ]; then
+            matrix="[$dev,$prod]"
+            if [ "$SCHEDULE" = "23 17 * * 6" ]; then lookback=13; else lookback=""; fi
+          else
+            case "$INPUT_ENV" in
+              dev) matrix="[$dev]" ;;
+              prod)
+                matrix="[$prod]"
+                if [ "$INPUT_DRY_RUN" != "true" ]; then needs_approval=true; fi
+                ;;
+              *) echo "::error::unknown environment '$INPUT_ENV'"; exit 1 ;;
+            esac
+            lookback="$INPUT_LOOKBACK"
+          fi
+          {
+            echo "matrix=$matrix"
+            echo "lookback=$lookback"
+            echo "needs_approval=$needs_approval"
+          } >> "$GITHUB_OUTPUT"
+
+  # Manual runs that write to prod wait for a reviewer. The approval environment holds no
+  # secrets; the scheduled prod run does not need it (ADR 0025).
+  approve:
+    needs: plan
+    if: needs.plan.outputs.needs_approval == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: prod-approval
+    steps:
+      - run: echo "Manual prod run approved by a reviewer."
+
+  etl:
+    needs: [plan, approve]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    environment: ${{ matrix.env }}
+    concurrency:
+      group: etl-${{ matrix.env }}
+      cancel-in-progress: false
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_OWNER: ${{ vars.HF_OWNER }}
+      CVM_LAKE_ENV: ${{ vars.CVM_LAKE_ENV }}
+      ENV_NAME: ${{ matrix.env }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      MONTHS: ${{ inputs.months }}
+      LOOKBACK: ${{ needs.plan.outputs.lookback }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.branch }}
+          persist-credentials: false
+
+      # setup-uv publishes no floating major tag, so it is pinned to an exact release.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked --no-dev
+
+      - name: Run pipeline
+        run: |
+          args=(run --env "$ENV_NAME" --target hf --out lake)
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "$MONTHS" ]; then
+            args+=(--months "$MONTHS")
+          elif [ -n "$LOOKBACK" ]; then
+            args+=(--lookback "$LOOKBACK")
+          fi
+          uv run --no-dev cvm-lake "${args[@]}"
+
+      - name: Keep dry run output
+        if: always() && env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: lake-${{ matrix.env }}-${{ github.run_id }}
+          path: lake
+          retention-days: 7
+          if-no-files-found: ignore

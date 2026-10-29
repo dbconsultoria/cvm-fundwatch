@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import zipfile
 from dataclasses import dataclass, field
 from datetime import date
@@ -24,6 +25,7 @@ from cvm_lake import bronze, silver
 from cvm_lake.http import HttpClient
 from cvm_lake.sources import bcb_ptax, cvm_inf_diario
 from cvm_lake.sources._csv import read_csv_as_strings
+from cvm_lake.store import HeadCommit
 
 CVM = "https://dados.cvm.gov.br/dados"
 INF_MONTHLY = CVM + "/FI/DOC/INF_DIARIO/DADOS/inf_diario_fi_{}.zip"
@@ -271,3 +273,50 @@ def write_silver_fund_daily(root: Path, ym: str, rows: list[dict[str, object]]) 
     path = root / silver.fund_daily_path(ym)
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(table, path)
+
+
+# Fake Hugging Face repo -------------------------------------------------------------------
+
+
+class StaleParentError(RuntimeError):
+    pass
+
+
+@dataclass
+class FakeStore:
+    """In-memory stand-in for ``HfStore``: a folder plus a commit list."""
+
+    remote: Path
+    repo_id: str = "owner/cvm-fundos-lake-dev"
+    private: bool = True
+    commits: list[tuple[str, str, list[str]]] = field(
+        default_factory=lambda: [("c0", "initial commit", [])]
+    )
+    downloads: list[list[str]] = field(default_factory=list)
+
+    def verify(self, env_name: str) -> None:
+        pass
+
+    def head(self) -> HeadCommit | None:
+        return HeadCommit(*self.commits[-1][:2]) if self.commits else None
+
+    def download(self, paths: list[str], dest: Path, revision: str | None) -> None:
+        head = self.head()
+        assert revision == (head.sha if head else None), "downloads must be pinned to the head"
+        self.downloads.append(list(paths))
+        for p in paths:
+            src = self.remote / p
+            if src.exists():
+                (dest / p).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dest / p)
+
+    def commit(self, root: Path, paths: list[str], message: str, parent: str | None) -> str:
+        head = self.head()
+        if parent != (head.sha if head else None):
+            raise StaleParentError(f"parent {parent} is not the head {head}")
+        for p in paths:
+            (self.remote / p).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / p, self.remote / p)
+        sha = f"c{len(self.commits)}"
+        self.commits.append((sha, message, list(paths)))
+        return sha

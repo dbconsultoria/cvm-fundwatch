@@ -4,8 +4,8 @@ A zero cost data pipeline for Brazilian investment fund data. It runs entirely o
 builds a bronze/silver/gold lake of Parquet files on Hugging Face datasets, detects anomalies in
 the daily fund reports, and publishes a static dashboard on GitHub Pages.
 
-> Status: Phase 2 (bronze, silver, gold and quality checks, local target). Publishing to
-> Hugging Face, anomaly detection and the dashboard come in later phases.
+> Status: Phase 3 (bronze, silver, gold, quality checks, publishing to Hugging Face from
+> GitHub Actions). Anomaly detection and the dashboard come in later phases.
 
 ## Sources
 
@@ -40,6 +40,18 @@ TODO (Phase 8): diagram. Short version:
 Every run reprocesses a window of months (default: current and previous) and checks the result
 before it counts as done. See [docs/decisions.md](docs/decisions.md) for the reasons.
 
+## How it runs
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | push, pull request | ruff, pytest |
+| `etl.yml` | Mon to Sat 17:23 UTC, manual | runs the pipeline for `dev` (branch `development`) and `prod` (branch `main`) and commits to Hugging Face, one commit per run |
+| `keepalive.yml` | monthly | keeps the schedule enabled |
+
+Manual runs default to a dry run: everything is built, nothing is published, and the output is
+kept as an artifact for 7 days. A manual run that writes to prod waits for a reviewer. Setup
+steps are in [docs/setup.md](docs/setup.md).
+
 ## Run locally
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -68,6 +80,12 @@ uv run cvm-lake run --env dev --months 202003 --no-extract
 
 The run prints a report per layer and exits with code 1 when a blocking quality check fails.
 
+Against Hugging Face (needs `HF_OWNER` and `HF_TOKEN`, see [docs/setup.md](docs/setup.md)):
+
+```bash
+uv run cvm-lake run --env dev --target hf --out data/hf-dev --dry-run
+```
+
 The run is incremental. `data/lake/_manifest.json` stores `Last-Modified`, `ETag` and a SHA-256
 per source partition, so unchanged months are skipped without downloading. A source that is
 down is skipped with a warning; a source whose file format changed fails the run.
@@ -90,3 +108,4 @@ MIT, see [LICENSE](LICENSE).
 
 - [docs/sources.md](docs/sources.md): what the source files really look like
 - [docs/decisions.md](docs/decisions.md): architecture decision records
+- [docs/setup.md](docs/setup.md): one time manual setup (Hugging Face, GitHub)

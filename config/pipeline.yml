@@ -1,13 +1,18 @@
 # Pipeline configuration. Secrets never live here; tokens come from the environment (HF_TOKEN).
+# {owner} is the Hugging Face user or org, from the HF_OWNER environment variable (ADR 0022).
 environments:
   dev:
-    hf_dataset_repo: "<HF_USER>/cvm-fundos-lake-dev"   # private
-    hf_model_repo: "<HF_USER>/cvm-fundos-anomaly-dev"  # private
+    hf_dataset_repo: "{owner}/cvm-fundos-lake-dev"   # must be private
+    hf_model_repo: "{owner}/cvm-fundos-anomaly-dev"  # private
     branch: development
   prod:
-    hf_dataset_repo: "<HF_USER>/cvm-fundos-lake"       # public
-    hf_model_repo: "<HF_USER>/cvm-fundos-anomaly"      # public
+    hf_dataset_repo: "{owner}/cvm-fundos-lake"       # must be public
+    hf_model_repo: "{owner}/cvm-fundos-anomaly"      # public
     branch: main
+
+publish:
+  max_months_per_commit: 12   # a longer backfill is split into several commits (ADR 0023)
+  max_files_per_commit: 95    # HF advice: stay under 100 files per commit
 
 window:
   lookback_months: 2          # daily run reprocesses M and M-1 (ADR 0009)

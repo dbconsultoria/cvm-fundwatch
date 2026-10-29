@@ -114,3 +114,29 @@ def test_cli_rebuilds_from_local_bronze_without_network(tmp_path: Path, server: 
     code = main(["run", "--env", "dev", "--out", str(root), "--months", "202610", "--no-extract"])
     assert code == 0
     assert (root / gold.returns_path("202610")).exists()
+
+
+def test_cli_hf_target_stops_at_the_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server: FakeServer
+) -> None:
+    monkeypatch.delenv("HF_OWNER", raising=False)
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    root = tmp_path / "lake"
+    code = main(["run", "--env", "prod", "--target", "hf", "--out", str(root), "--dry-run"])
+    assert code == 2
+    assert not root.exists(), "nothing may run before the guard passes"
+    assert server.calls == []
+
+
+def test_cli_writes_step_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server: FakeServer
+) -> None:
+    root = tmp_path / "lake"
+    _run(root, server, ["202610"], "r1")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    assert (
+        main(["run", "--env", "dev", "--out", str(root), "--months", "202610", "--no-extract"]) == 0
+    )
+    text = summary.read_text(encoding="utf-8")
+    assert "## cvm-fundwatch ETL: `dev`" in text and "| 202610 | v2 | 4 |" in text
