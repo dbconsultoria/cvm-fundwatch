@@ -4,8 +4,8 @@ A zero cost data pipeline for Brazilian investment fund data. It runs entirely o
 builds a bronze/silver/gold lake of Parquet files on Hugging Face datasets, detects anomalies in
 the daily fund reports, and publishes a static dashboard on GitHub Pages.
 
-> Status: Phase 4 (lake, publishing to Hugging Face from GitHub Actions, anomaly detection v1
-> with GitHub Issue alerts). Evaluation, the ML layer and the dashboard come in later phases.
+> Status: Phase 5 (lake, publishing to Hugging Face, anomaly detection v1 with alerts,
+> evaluation harness, restatements). The ML layer and the dashboard come in later phases.
 
 ## Sources
 
@@ -37,6 +37,7 @@ TODO (Phase 8): diagram. Short version:
 | `gold/daily_flows` | `ano_mes` | day x peer group x FIC flag | AUM, subscriptions, redemptions, net flow |
 | `gold/returns_brl_usd` | `ano_mes` | class or subclass per day | daily return in BRL and USD |
 | `gold/anomalies` | `ano_mes` | report x anomaly type | see [docs/anomaly_detection.md](docs/anomaly_detection.md) |
+| `gold/restatements` | `ano_mes` | changed value | values CVM corrected after publishing, appended per run |
 
 Every run reprocesses a window of months (default: current and previous) and checks the result
 before it counts as done. See [docs/decisions.md](docs/decisions.md) for the reasons.
@@ -80,6 +81,14 @@ uv run cvm-lake run --env dev --months 202003 --no-extract
 ```
 
 The run prints a report per layer and exits with code 1 when a blocking quality check fails.
+
+Evaluate the anomaly detector with injected errors on a local lake (needs silver of the
+scored months, the 3 months before them and, if available, the month after):
+
+```bash
+uv run cvm-lake evaluate --lake data/lake --months 202609 \
+  --experiment config/experiments/v1_baselines.yml --out experiments/results
+```
 
 Against Hugging Face (needs `HF_OWNER` and `HF_TOKEN`, see [docs/setup.md](docs/setup.md)):
 

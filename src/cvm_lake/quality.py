@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 
 from cvm_lake import silver
 from cvm_lake.anomalies.detector import AnomalyStats, anomalies_path
+from cvm_lake.anomalies.restatements import RestatementStats
 from cvm_lake.config import QualityConfig
 from cvm_lake.db import lit, one
 from cvm_lake.gold import GoldStats
@@ -207,4 +208,18 @@ def check_anomalies(
             Severity.WARN,
             f"{high} high of {stats.scored_reports} reports ({share:.3%}, warn above 0.5%)",
         ),
+    ]
+
+
+def check_restatements(stats: RestatementStats, rows: int) -> list[CheckResult]:
+    share = stats.changed_reports / rows if rows else 0.0
+    return [
+        # CVM corrects a few reports; a mass change is worth a look (new layout, reprocessing)
+        CheckResult(
+            "restated_share",
+            f"gold/restatements/{stats.month}",
+            share <= 0.05,
+            Severity.WARN,
+            f"{stats.changed_reports} of {rows} reports changed ({share:.2%}, warn above 5%)",
+        )
     ]

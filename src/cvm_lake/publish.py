@@ -21,6 +21,7 @@ from pathlib import Path
 
 from cvm_lake import gold, silver
 from cvm_lake.anomalies.detector import anomalies_path
+from cvm_lake.anomalies.restatements import restatements_path
 from cvm_lake.anomalies.settings import load_anomaly_config
 from cvm_lake.bronze import Status
 from cvm_lake.card import render_card
@@ -62,6 +63,8 @@ def input_paths(manifest: Manifest, months: list[str], history_months: int = 3) 
             if entry:
                 paths.add(entry.path)
         paths.add(anomalies_path(ym))  # keeps first_seen_run of known findings
+        paths.add(silver.fund_daily_path(ym))  # previous version, to detect restatements
+        paths.add(restatements_path(ym))  # restatements are appended, never rewritten
     before = shift_month(months[0], -1)
     paths.add(silver.ptax_daily_path(before))
     # gold needs the month before the window; anomalies need history_months before it and
@@ -91,6 +94,7 @@ def output_paths(report: RunReport, manifest: Manifest) -> list[str]:
     for g in report.gold:
         paths.update((gold.daily_flows_path(g.month), gold.returns_path(g.month)))
     paths.update(anomalies_path(a.month) for a in report.anomalies)
+    paths.update(restatements_path(r.month) for r in report.restatements if r.new_rows)
     return sorted(paths)
 
 

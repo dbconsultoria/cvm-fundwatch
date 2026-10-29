@@ -119,3 +119,84 @@ Calibration history, so the evaluation stays honest:
 
 Because of step 3, **March 2020 is in-sample for v1**. Phase 5 must use other stress periods as
 holdout for the claim "market wide moves are not flagged".
+
+## Evaluation (Phase 5)
+
+There are no labels, so the detector is evaluated two ways (ADRs 0031 and 0032).
+
+### Synthetic injection
+
+`src/cvm_lake/anomalies/injection.py` writes errors into a copy of silver before the features
+are computed, with a fixed seed, one error per fund:
+
+| Kind | Error | Counts as the right type |
+|---|---|---|
+| `decimal_shift` | quota or equity x10, x100, x1000 or the inverse, one report | `decimal_shift` |
+| `quota_glitch` | quota x(1 +/- 2% to 20%), equity unchanged | `return_outlier`, `equity_residual` |
+| `equity_jump` | equity x(1 +/- 5% to 50%), quota unchanged | `equity_residual`, `structural_event` |
+| `stale_quota` | quota repeated for 6 reports | `stale_quota` |
+| `negative_equity` | equity sign flipped | `impossible_value` |
+| `missing_quota` | quota null | `missing_value` |
+| `shareholder_spike` | shareholders x10 | `shareholder_spike`, `structural_event` |
+
+The report right after an error is an echo and is not scored. Metrics per variant:
+
+- recall per kind at low, medium and high severity (and the share detected with the right type)
+- precision lower bound: flagged reports that are injected errors, over all flagged reports;
+  real anomalies in the clean data count as false positives, so the true precision is higher
+- clean flags per 10,000 reports: the variant's alarm rate without injection
+
+`config/experiments/v1_baselines.yml` compares, on the same injected errors:
+
+| Variant | Layers |
+|---|---|
+| `rules_only` | rules and decimal shift |
+| `classic_z` | + layer 2 with mean and standard deviation, no floor, no market gate |
+| `robust_z` | + layer 2 with median and MAD, floor and market gate |
+| `robust_z_residual` | + layer 3 |
+| `v1_full` | + layer 4 |
+
+Run it on a local lake that has silver for the scored months, the 3 months before them and the
+month after (if published):
+
+```bash
+uv run cvm-lake evaluate --lake data/lake --months 202609,202610 \
+  --experiment config/experiments/v1_baselines.yml --out experiments/results
+```
+
+One JSON and one Markdown file per month land in `experiments/results/`, with the seed, config
+hashes, silver source hashes, git commit and package versions. A month takes 5 to 30 minutes on
+a laptop (10 detector runs over 4 to 5 months of data), so run it once the full history is in
+the prod lake, not on every change.
+
+Suggested months: a calm month (for example 2026-09), March 2020 (in-sample for v1, see the
+calibration history above) and holdout stress periods: 2026-10 (crash of 10-26) and earlier
+episodes once the history is backfilled.
+
+### CI floors
+
+`tests/test_evaluation.py` runs the harness on a seeded synthetic panel in every CI run and
+fails below these recalls:
+
+| Kind | Severity | Floor |
+|---|---|---|
+| `decimal_shift`, `negative_equity` | high | 0.95 |
+| `missing_quota` | medium | 0.95 |
+| `quota_glitch`, `equity_jump`, `stale_quota`, `shareholder_spike` | medium | 0.90 |
+
+It also checks decimal shift recall on a crash day (layers 2 and 4 silent), precision 1.0 on
+the clean panel, and that the `rules_only` baseline misses quota glitches.
+
+### Restatements as weak labels
+
+Every run compares the new silver of each window month with the previous version and appends
+the changes to `gold/restatements`, with `flagged_before` (the anomaly types the old version
+had). Once a few months have accumulated:
+
+```sql
+-- share of corrected reports that the detector had flagged before the correction
+SELECT count(DISTINCT (fund_id, class_id, dt)) FILTER (WHERE flagged_before <> '')
+       / count(DISTINCT (fund_id, class_id, dt)) AS flagged_share
+FROM read_parquet('hf://datasets/<repo>/gold/restatements/*/*.parquet')
+WHERE field IN ('quota', 'equity') AND abs(rel_change) > 0.01;
+```

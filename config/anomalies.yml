@@ -2,6 +2,11 @@
 # Changing any value here means a new model_version.
 model_version: v1-rules-robust
 
+# Model structure. Experiments (config/experiments/) switch these to build baselines.
+layers: [l2, l3, l4]       # l2 own history, l3 accounting identity, l4 peer excess
+robust_stats: true         # false: mean and standard deviation instead of median and MAD
+market_gate: true          # silence l2 and l4 on market moves
+
 history_months: 3          # silver months loaded before the scored month (rolling windows)
 window: 63                 # prior reports in the rolling median/MAD (about 3 months)
 min_history: 30            # fewer prior reports: rules only

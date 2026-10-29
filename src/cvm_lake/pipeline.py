@@ -14,6 +14,11 @@ from pathlib import Path
 from cvm_lake import bronze, gold, quality, silver
 from cvm_lake.anomalies.detector import AnomalyStats, detect_month
 from cvm_lake.anomalies.report import Alert, select_alerts
+from cvm_lake.anomalies.restatements import (
+    RestatementStats,
+    detect_restatements,
+    keep_previous,
+)
 from cvm_lake.anomalies.settings import AnomalyConfig, load_anomaly_config
 from cvm_lake.bronze import BronzeRun, PartitionResult
 from cvm_lake.config import Settings
@@ -37,6 +42,7 @@ class RunReport:
     ptax: list[silver.PtaxStats] = field(default_factory=list)
     gold: list[gold.GoldStats] = field(default_factory=list)
     anomalies: list[AnomalyStats] = field(default_factory=list)
+    restatements: list[RestatementStats] = field(default_factory=list)
     alerts: list[Alert] = field(default_factory=list)
     checks: list[CheckResult] = field(default_factory=list)
 
@@ -78,12 +84,21 @@ def run_pipeline(
     built = [ym for ym in months if (root / bronze.inf_diario_path(ym)).exists()]
 
     for ym in built:
+        old_version = keep_previous(root, ym, work_dir)
         stats = silver.build_fund_daily(con, root, ym)
         report.fund_daily.append(stats)
         previous = manifest.get(SILVER_FUND_DAILY, ym)
         report.checks += quality.check_fund_daily(
             con, root, stats, previous.row_count if previous else None, cfg
         )
+        if old_version is not None:
+            # before anomalies are recomputed: their old partition describes the old version
+            restated = detect_restatements(
+                con, root, ym, old_version, run_id, previous.commit_sha if previous else None
+            )
+            if restated is not None:
+                report.restatements.append(restated)
+                report.checks += quality.check_restatements(restated, stats.rows)
 
     report.registry = silver.build_fund_registry(con, root, settings.peer_groups)
     if report.registry is not None:
@@ -166,6 +181,11 @@ def format_report(report: RunReport) -> str:
         sev = ", ".join(f"{k} {v}" for k, v in sorted(a.by_severity.items()))
         lines.append(f"  {a.month}  {a.rows:,} rows ({sev})  new high {a.new_high}")
     lines.append(f"  alerts: {len(report.alerts)}")
+    for r in report.restatements:
+        lines.append(
+            f"  restatements {r.month}: {r.changed_reports:,} reports changed "
+            f"({r.flagged_before:,} flagged before), {r.new_rows:,} new rows"
+        )
     lines.append("")
     failed = [c for c in report.checks if not c.passed]
     lines.append(

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from cvm_lake import __version__
+from cvm_lake.anomalies import evaluate
 from cvm_lake.anomalies.report import render_alerts
 from cvm_lake.bronze import SOURCES
 from cvm_lake.config import ENVIRONMENTS, Settings, load_settings
@@ -79,7 +80,32 @@ def build_parser() -> argparse.ArgumentParser:
         "run, a failed run or when there are none",
     )
     run.add_argument("-v", "--verbose", action="store_true")
+
+    ev = sub.add_parser(
+        "evaluate", help="run an anomaly experiment (injected errors) on a local lake"
+    )
+    ev.add_argument("--lake", type=Path, required=True, help="local lake with silver built")
+    ev.add_argument("--months", type=_months_arg, required=True, help="months to score")
+    ev.add_argument("--experiment", type=Path, required=True, help="config/experiments/*.yml")
+    ev.add_argument("--out", type=Path, default=Path("experiments/results"))
+    ev.add_argument("--anomaly-config", type=Path, help="default: config/anomalies.yml")
+    ev.add_argument("-v", "--verbose", action="store_true")
     return parser
+
+
+def cmd_evaluate(args: argparse.Namespace) -> int:
+    experiment = evaluate.load_experiment(args.experiment)
+    # one result file per month, saved as soon as the month is done: a long run that is
+    # stopped keeps what it finished
+    for ym in args.months:
+        with tempfile.TemporaryDirectory(prefix="cvm-eval-") as work:
+            results = evaluate.run_experiment(
+                args.lake, [ym], experiment, Path(work), args.anomaly_config
+            )
+        json_path, md_path = evaluate.save_results(results, args.out)
+        print(evaluate.render_markdown(results))
+        log.info("results: %s, %s", json_path, md_path)
+    return 0
 
 
 def default_run_id() -> str:
@@ -193,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not args.verbose:
         logging.getLogger("httpx").setLevel(logging.WARNING)
-    return cmd_run(args)
+    return cmd_evaluate(args) if args.command == "evaluate" else cmd_run(args)
 
 
 if __name__ == "__main__":

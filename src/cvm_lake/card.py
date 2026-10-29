@@ -14,6 +14,7 @@ CONFIGS = (
         "daily return per class in BRL and USD",
     ),
     ("anomalies", "gold/anomalies/*/*.parquet", "anomalies found in the daily reports"),
+    ("restatements", "gold/restatements/*/*.parquet", "values CVM changed after publishing"),
     ("fund_daily", "silver/fund_daily/*/*.parquet", "typed daily report per class or subclass"),
     ("fund_registry", "silver/fund_registry/*.parquet", "peer group intervals per CNPJ"),
     ("ptax_daily", "silver/ptax_daily/*/*.parquet", "USD/BRL PTAX per day"),

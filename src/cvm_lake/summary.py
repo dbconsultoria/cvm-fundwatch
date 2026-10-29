@@ -74,6 +74,18 @@ def render_markdown(env_name: str, repo_id: str | None, chunks: list[ChunkResult
                 )
             lines += ["", f"Alerts (new high, within the daily budget): {len(r.alerts)}", ""]
 
+        if r.restatements:
+            lines += ["**Restatements**", ""]
+            lines += [
+                "| Month | Reports changed | Flagged before | New rows |",
+                "|---|---:|---:|---:|",
+            ]
+            for x in r.restatements:
+                lines.append(
+                    f"| {x.month} | {x.changed_reports:,} | {x.flagged_before:,} | {x.new_rows:,} |"
+                )
+            lines.append("")
+
         failed = [c for c in r.checks if not c.passed]
         lines.append(
             f"**Quality**: {len(r.checks)} checks, {sum(c.blocking for c in failed)} failed, "

@@ -329,3 +329,38 @@ Short ADR style entries. Status is `accepted`, `proposed` (waiting for review) o
   Dry runs and failed runs post nothing.
 - Consequence: a backfill or the 13 month Saturday rerun cannot flood the Issue; old findings
   are in the dataset, not in notifications.
+
+## 0031 Evaluation by synthetic injection
+
+- Status: accepted
+- Context: there are no labels for errors in the CVM reports.
+- Decision:
+  - Errors are injected into a copy of silver before features are computed: decimal shifts
+    (x10 to x1000 and inverses, quota or equity), quota glitches (2% to 20%), equity jumps
+    (5% to 50%), stale quota (6 reports), negative equity, missing quota, shareholders x10.
+    One injection per fund, on a report with enough history and a next report, at random with
+    a fixed seed. The real lake is never modified.
+  - The report after an error (the echo) is excluded from scoring.
+  - Recall per error kind at low, medium and high severity. Precision is reported as a lower
+    bound: real anomalies in the clean data count as false positives. Each variant also runs on
+    the clean data to give its base alarm rate (flagged reports per 10,000).
+  - Experiments are YAML files in `config/experiments/` (seed, injection counts, variants as
+    overrides of `config/anomalies.yml`). Results go to `experiments/results/` as JSON and
+    Markdown, with the git commit, config hashes, silver source hashes and package versions.
+  - CI runs the harness on the synthetic panel with recall floors (decimal shift and negative
+    equity >= 0.95 at high; the other kinds >= 0.9 or 0.95 at medium), also on a crash day.
+- Consequence: a change that loses recall fails CI; experiments on real months are
+  reproducible from the result file alone.
+
+## 0032 Restatements
+
+- Status: accepted
+- Decision: before silver of a month is rebuilt, the previous version (from the repo) is kept
+  aside. When the source hash changed, every changed value, added and removed report is
+  appended to `gold/restatements/ano_mes=YYYYMM` with the old and new exact values, the
+  anomaly types the old version had (`flagged_before`), the commit of the old version and the
+  run. Rows are never removed.
+- Consequence: the table is a growing set of weak labels ("CVM corrected this report") and
+  `flagged_before` turns "did we flag it before the correction?" into a single query. The old
+  version itself stays readable at `hf://datasets/<repo>@<old_commit>/...`. Each daily run
+  downloads the window's silver partitions (about 20 MB) to make the comparison.

@@ -1,0 +1,28 @@
+# Baselines vs the v1 layers, on the same injected errors (ADR 0031).
+# Changing anything here changes the experiment: keep old files, add new ones.
+name: v1-baselines
+seed: 20261029
+
+injections_per_month:
+  decimal_shift: 300
+  quota_glitch: 300
+  equity_jump: 300
+  stale_quota: 150
+  negative_equity: 150
+  missing_quota: 150
+  shareholder_spike: 150
+
+# Overrides of config/anomalies.yml. Rules (and the decimal shift check) are always on.
+variants:
+  rules_only:
+    layers: []
+  classic_z:            # textbook z score: mean and standard deviation, no floor, no market gate
+    layers: [l2]
+    robust_stats: false
+    market_gate: false
+  robust_z:
+    layers: [l2]
+  robust_z_residual:
+    layers: [l2, l3]
+  v1_full:
+    layers: [l2, l3, l4]

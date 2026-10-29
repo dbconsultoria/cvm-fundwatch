@@ -88,6 +88,8 @@ rolling AS (
            lead(log_ret) OVER (PARTITION BY cnpj, subclass_id ORDER BY dt) AS next_log_ret,
            median(log_ret) OVER w AS own_median,
            mad(log_ret) OVER w AS own_mad,
+           avg(log_ret) OVER w AS own_mean,
+           stddev_samp(log_ret) OVER w AS own_std,
            median(excess_ret) OVER w AS excess_median,
            mad(excess_ret) OVER w AS excess_mad,
            median(residual) OVER w AS res_median,
@@ -100,6 +102,8 @@ scored AS (
     SELECT *,
            -- layer 2: own log return vs own history
            (log_ret - own_median) / (1.4826 * greatest(own_mad, mad_floor)) AS z_return,
+           -- classic baseline for experiments: mean and standard deviation, no floor
+           (log_ret - own_mean) / nullif(own_std, 0) AS z_return_classic,
            -- layer 4: excess return vs the fund's own history of excess returns, so a fund
            -- that always tracks its peers loosely is not flagged for doing so
            (excess_ret - excess_median) / (1.4826 * greatest(excess_mad, mad_floor))

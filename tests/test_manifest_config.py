@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from cvm_lake.config import ConfigError, load_settings
 from cvm_lake.manifest import Manifest, ManifestEntry
@@ -60,3 +61,21 @@ def test_config_rejects_unknown_env_and_bad_values(tmp_path: Path) -> None:
     bad.write_text("environments: {dev: {}}\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="invalid config"):
         load_settings("dev", bad)
+
+
+@pytest.mark.parametrize("name", ["pipeline.yml", "anomalies.yml", "experiments/v1_baselines.yml"])
+def test_config_files_have_no_duplicate_keys(name: str) -> None:
+    """PyYAML silently keeps the last of two equal keys; that hid a bug once."""
+
+    class Strict(yaml.SafeLoader):
+        pass
+
+    def mapping(loader: yaml.SafeLoader, node: yaml.MappingNode) -> dict:
+        keys = [loader.construct_object(k) for k, _ in node.value]
+        duplicates = {k for k in keys if keys.count(k) > 1}
+        assert not duplicates, f"{name}: duplicate keys {duplicates}"
+        return loader.construct_mapping(node)
+
+    Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+    root = Path(__file__).resolve().parents[1] / "config"
+    yaml.load((root / name).read_text(encoding="utf-8"), Strict)

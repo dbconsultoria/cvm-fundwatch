@@ -19,7 +19,16 @@ from cvm_lake.anomalies.settings import AnomalyConfig
 
 
 def flags_sql(cfg: AnomalyConfig) -> str:
-    """Temp table ``flags``: one row per report with boolean layer flags. Reads ``features``."""
+    """Temp table ``flags``: one row per report with boolean layer flags. Reads ``features``.
+
+    Layers not in ``cfg.layers`` are always false; ``cfg.robust = False`` swaps the robust z of
+    layer 2 for the classic mean/standard deviation z (an experiment baseline).
+    """
+
+    def on(layer: str) -> str:
+        return "true" if layer in cfg.layers else "false"
+
+    z_ret = "z_return" if cfg.robust else "z_return_classic"
     shift = f"""
         CASE WHEN {{col}} IS NOT NULL
                   AND abs(round({{col}})) BETWEEN 1 AND {cfg.max_power}
@@ -35,7 +44,9 @@ def flags_sql(cfg: AnomalyConfig) -> str:
                         OR subscriptions < 0 OR redemptions < 0, false) AS impossible,
                (quota IS NULL OR equity IS NULL) AS missing,
                n_prior >= {cfg.min_history} AS has_history,
-               coalesce(market_z >= {cfg.market_z}, false) AS market_move
+               {
+        "coalesce(market_z >= " + str(cfg.market_z) + ", false)" if cfg.market_gate else "false"
+    } AS market_move
         FROM features
     ),
     b AS (
@@ -53,13 +64,13 @@ def flags_sql(cfg: AnomalyConfig) -> str:
                  OR (equity_shift <> 0 AND equity_shift = -prev_equity_shift) AS echo,
                -- layer 2: own history. Layers 2 and 4 are silenced on a market move and the
                -- report after it (ADR 0028)
-               coalesce(has_history AND abs(z_return) > {cfg.z_return}
+               {on("l2")} AND coalesce(has_history AND abs({z_ret}) > {cfg.z_return}
                         AND NOT coalesce(market_move, false), false) AS l2,
                -- layer 3: accounting identity residual
-               coalesce(has_history AND abs(residual) >= {cfg.min_abs_residual}
+               {on("l3")} AND coalesce(has_history AND abs(residual) >= {cfg.min_abs_residual}
                         AND abs(z_residual) > {cfg.z_residual}, false) AS l3,
                -- layer 4: excess return over the peer group, vs the fund's own excess history
-               coalesce(has_history AND abs(z_excess) > {cfg.z_excess}
+               {on("l4")} AND coalesce(has_history AND abs(z_excess) > {cfg.z_excess}
                         AND NOT coalesce(market_move, false), false) AS l4,
                coalesce((shareholder_ratio >= {cfg.shareholder_ratio}
                          OR shareholder_ratio <= 1.0 / {cfg.shareholder_ratio})
