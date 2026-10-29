@@ -1,132 +1,321 @@
 # cvm-fundwatch
 
-A zero cost data pipeline for Brazilian investment fund data. It runs entirely on GitHub Actions,
-builds a bronze/silver/gold lake of Parquet files on Hugging Face datasets, detects anomalies in
+A zero cost data pipeline for Brazilian investment fund data. It runs entirely on GitHub
+Actions, builds a bronze/silver/gold lake of Parquet files on Hugging Face, detects anomalies in
 the daily fund reports, and publishes a static dashboard on GitHub Pages.
 
-> Status: Phase 7 (lake, publishing to Hugging Face, anomaly detection with alerts, evaluation
-> harness, weekly Isolation Forest training, dashboard on GitHub Pages). Polish comes next.
+- **Sources**: CVM daily reports of every investment fund since 2000 (today about 25,000
+  classes and 500,000 rows a month), the CVM fund registry, and the BCB PTAX dollar rate.
+- **Lake**: Parquet on a Hugging Face dataset repo, one atomic commit per run, queryable from the
+  Hugging Face Data Studio, DuckDB or Polars.
+- **Anomaly detection**: rules, robust statistics, an accounting identity check, peer context
+  and an Isolation Forest, evaluated with injected errors. Market wide moves are not flagged.
+- **Dashboard**: `https://dbconsultoria.github.io/cvm-fundwatch/` (after the first prod run).
 
-## Sources
-
-| Source | What | Docs |
-|---|---|---|
-| CVM Informe Diário | Daily quota, equity, flows, shareholders per fund/class/subclass | [docs/sources.md](docs/sources.md#cvm-informe-diario) |
-| CVM registry | Fund type and class, used as the peer group | [docs/sources.md](docs/sources.md#cvm-registry) |
-| BCB PTAX | Official USD/BRL rate | [docs/sources.md](docs/sources.md#bcb-ptax) |
+No servers, no databases, no credit card.
 
 ## Architecture
 
-TODO (Phase 8): diagram. Short version:
+```mermaid
+flowchart LR
+  CVM["CVM open data"] --> ETL
+  BCB["BCB PTAX API"] --> ETL
+  subgraph gha["GitHub Actions"]
+    ETL["etl.yml<br/>DuckDB in the runner"]
+    TRAIN["train.yml<br/>Isolation Forest"]
+    PAGES["pages.yml<br/>dashboard build"]
+  end
+  subgraph hf["Hugging Face"]
+    DS[("dataset repo<br/>bronze / silver / gold")]
+    MR[("model repo")]
+  end
+  DS -- "state + inputs" --> ETL
+  ETL -- "one commit per run" --> DS
+  MR -- champion --> ETL
+  DS --> TRAIN -- "if it wins" --> MR
+  DS -- gold/reporting --> PAGES --> SITE["GitHub Pages"]
+  ETL -- "new high findings" --> ISSUE["GitHub Issue"]
+```
 
-- Compute: DuckDB inside GitHub hosted runners.
-- Storage: Hugging Face dataset repos (dev private, prod public). One commit per run.
-- Orchestration: GitHub Actions schedules. Branch `development` maps to dev, `main` to prod.
-- Dashboard: Observable Framework on GitHub Pages.
+Every run: read the state (`_manifest.json`) and the partitions of its window from Hugging Face,
+download only source files that changed, rebuild the layers in DuckDB inside the runner, run
+quality checks, and push everything in one commit. A failed check publishes nothing. Details,
+diagrams and the code map: [docs/architecture.md](docs/architecture.md).
 
-## Lake layout
-
-| Table | Partition | Grain | Notes |
-|---|---|---|---|
-| `bronze/cvm_inf_diario` | `ano_mes` | source row | all columns as strings + source metadata |
-| `bronze/cvm_registry/<table>` | `snapshot_date` | source row | 4 registry tables |
-| `bronze/bcb_ptax` | `ano_mes` | source row | |
-| `silver/fund_daily` | `ano_mes` | class or subclass per day | one typed schema for the three CVM layouts |
-| `silver/fund_registry` | none | class interval | peer group over time |
-| `silver/ptax_daily` | `ano_mes` | day | latest quote per date |
-| `gold/daily_flows` | `ano_mes` | day x peer group x FIC flag | AUM, subscriptions, redemptions, net flow |
-| `gold/returns_brl_usd` | `ano_mes` | class or subclass per day | daily return in BRL and USD |
-| `gold/anomalies` | `ano_mes` | report x anomaly type | see [docs/anomaly_detection.md](docs/anomaly_detection.md) |
-| `gold/restatements` | `ano_mes` | changed value | values CVM corrected after publishing, appended per run |
-| `gold/reporting` | none | small aggregates | tables behind the dashboard, see [dashboard/README.md](dashboard/README.md) |
-
-Every run reprocesses a window of months (default: current and previous) and checks the result
-before it counts as done. See [docs/decisions.md](docs/decisions.md) for the reasons.
-
-## How it runs
-
-| Workflow | Trigger | What it does |
+| Layer | Tables | Grain |
 |---|---|---|
-| `ci.yml` | push, pull request | ruff, pytest, dashboard build from demo data |
-| `etl.yml` | Mon to Sat 17:23 UTC, manual | runs the pipeline for `dev` (branch `development`) and `prod` (branch `main`) and commits to Hugging Face, one commit per run |
-| `train.yml` | Sundays 06:17 UTC, manual | trains the Isolation Forest per environment, compares it with the champion, publishes the winner to the HF model repo (prod after approval) |
-| `pages.yml` | after each ETL on main, manual | builds the dashboard from `gold/reporting` and deploys it to GitHub Pages |
+| bronze | `cvm_inf_diario`, `cvm_registry/<table>`, `bcb_ptax` | source rows as strings, plus source metadata |
+| silver | `fund_daily`, `fund_registry`, `ptax_daily` | typed, one schema across the three CVM layouts, deduplicated |
+| gold | `daily_flows`, `returns_brl_usd`, `anomalies`, `restatements` | business tables, partitioned `ano_mes=YYYYMM` |
+| gold | `reporting/*` | small aggregates for the dashboard |
+
+| Workflow | When | What |
+|---|---|---|
+| `ci.yml` | push, pull request | ruff, the offline test suite, dashboard build from demo data |
+| `etl.yml` | Mon to Sat 17:23 UTC, manual | pipeline for dev and prod; 13 month lookback on Saturdays |
+| `train.yml` | Sundays 06:17 UTC, manual | trains the Isolation Forest, publishes it only if it beats the current one |
+| `pages.yml` | after each ETL on `main`, manual | builds and deploys the dashboard |
 | `keepalive.yml` | monthly | keeps the schedules enabled |
 
-Manual runs default to a dry run: everything is built, nothing is published, and the output is
-kept as an artifact for 7 days. A manual run that writes to prod waits for a reviewer. Setup
-steps are in [docs/setup.md](docs/setup.md).
+## Run it on GitHub
+
+Everything below is done once in the Hugging Face and GitHub web interfaces. `<owner>` is your
+Hugging Face user or organization; `<github user>` is the GitHub account that owns the repo.
+
+### 1. Hugging Face: repos and tokens
+
+1. Create four repositories (New, then Dataset or Model). The names are fixed by
+   `config/pipeline.yml`; the pipeline refuses to run if a visibility is wrong.
+
+   | Repository | Type | Visibility |
+   |---|---|---|
+   | `<owner>/cvm-fundos-lake-dev` | Dataset | private |
+   | `<owner>/cvm-fundos-lake` | Dataset | public |
+   | `<owner>/cvm-fundos-anomaly-dev` | Model | private |
+   | `<owner>/cvm-fundos-anomaly` | Model | public |
+
+2. Create four **fine grained** tokens (Settings, Access Tokens, Create new token,
+   Fine-grained). Under "Repositories permissions" select only the repos listed, tick the
+   access listed, leave everything else unticked. Copy each token when it is shown.
+
+   | Token | Write access | Read access |
+   |---|---|---|
+   | `cvm-fundwatch-dev` | `cvm-fundos-lake-dev` | |
+   | `cvm-fundwatch-prod` | `cvm-fundos-lake` | |
+   | `cvm-fundwatch-model-dev` | `cvm-fundos-anomaly-dev` | `cvm-fundos-lake-dev` |
+   | `cvm-fundwatch-model-prod` | `cvm-fundos-anomaly` | `cvm-fundos-lake` |
+
+### 2. GitHub: repository settings
+
+In the GitHub repository (create it as **public** if it does not exist yet):
+
+1. **Settings, Actions, General**, Workflow permissions: "Read repository contents and packages
+   permissions". Leave "Allow GitHub Actions to create and approve pull requests" unticked.
+2. **Settings, Secrets and variables, Actions, Variables**: repository variable
+   `HF_OWNER` = `<owner>`.
+3. **Settings, Pages**, Build and deployment, Source: **GitHub Actions**.
+4. **Settings, Environments**, create three environments:
+
+   | Environment | Deployment branches | Required reviewers | Secrets | Variable |
+   |---|---|---|---|---|
+   | `dev` | selected: `main`, `development` | none | `HF_TOKEN` = dev token, `HF_MODEL_TOKEN` = model dev token | `CVM_LAKE_ENV` = `dev` |
+   | `prod` | selected: `main` | none | `HF_TOKEN` = prod token, `HF_MODEL_TOKEN` = model prod token | `CVM_LAKE_ENV` = `prod` |
+   | `prod-approval` | selected: `main` | yourself | none | none |
+
+   `dev` allows `main` because scheduled workflows always start from the default branch; the
+   dev job then checks out `development`. Reviewers sit on `prod-approval`, not on `prod`, so
+   the daily prod run is not blocked while manual writes to prod still need an approval.
+
+### 3. Push the code
+
+Once step 2 is done (otherwise the first scheduled runs fail at the guard):
+
+```bash
+git push -u origin main
+git push origin main:development
+```
+
+Then **Settings, Rules, Rulesets**, a branch ruleset for `main`: require a pull request before
+merging, require the status checks `test` and `dashboard` (they appear after the first CI run),
+block force pushes, restrict deletions. Optionally a lighter one for `development` (require
+`test`, block force pushes). After the first Pages deployment, restrict the `github-pages`
+environment to `main` too.
+
+### 4. First dev runs
+
+Actions, **etl**, Run workflow:
+
+1. Branch `development`, environment `dev`, **dry run ticked**. Read the job summary (bronze
+   status, rows per month, anomalies, quality) and download the `lake-dev-...` artifact if you
+   want to look at the files.
+2. Same with **dry run unticked**. The dev dataset gets its first commit; open it on Hugging Face
+   and check the dataset viewer shows `daily_flows`.
+3. Backfill dev with about a year, e.g. `months` = `202501-202512`, dry run unticked. This gives
+   the anomaly layers their history and the forest something to train on.
+
+### 5. Promote to prod
+
+1. Open a pull request from `development` to `main`; merge when CI is green.
+2. Actions, etl, Run workflow, branch `main`, environment `prod`, dry run ticked, then unticked.
+   The unticked run waits for your approval in `prod-approval`.
+3. Backfill prod **oldest first**, one dispatch per range of **at most 36 months** (the job has a
+   2 hour limit and a month takes about 1 to 1.5 minutes): `200001-200212`, `200301-200512`, ...,
+   up to the current year. Each range is committed in 12 month chunks. Order matters: the first
+   month of a range reads the previous month's silver, published by the previous range.
+4. The first prod ETL triggers **pages**; the dashboard appears at
+   `https://<github user>.github.io/cvm-fundwatch/`.
+
+### 6. Train the Isolation Forest
+
+Once an environment has at least 10 months of history (6 training months, 3 history months, the
+evaluation month): Actions, **train**, Run workflow, environment `dev`, then `prod` (prod waits
+for approval before publishing). The job summary shows the model card: average precision,
+recall, precision and alarm rate against the current model. Until a model exists the forest
+layer is simply off.
+
+### 7. Day to day
+
+Nothing to do. The ETL runs Monday to Saturday at 17:23 UTC (after the CVM refresh and the PTAX
+publication), training on Sundays, the dashboard after each ETL. What to look at:
+
+| Signal | Meaning | Action |
+|---|---|---|
+| green run | published | none |
+| yellow run (warnings) | a source was down, or a soft check warned | none; the next run catches up |
+| red run, quality failed | a blocking check failed; nothing was published | read the step summary; rerun with dry run to inspect the artifact |
+| red run, guard (exit 2) | a variable, secret, token scope or repo visibility is wrong | fix the setting named in the log |
+| red run, commit failed | something else wrote to the repo during the run | rerun |
+| Issue `[prod] High severity anomalies YYYY-MM` | new high findings (at most 20 per date) | read; details in `gold/anomalies` |
+| schedule stopped | GitHub disables schedules after 60 days without activity | `keepalive` re-enables them monthly; or enable `etl` in the Actions tab |
+
+Manual runs default to a dry run. A backfill is a manual run with `months`; a rerun of the
+same months is safe (idempotent).
 
 ## Run locally
 
-Requires [uv](https://docs.astral.sh/uv/).
+Requires [uv](https://docs.astral.sh/uv/) (and Node 20+ for the dashboard).
 
 ```bash
 uv sync
-uv run pytest
+uv run pytest            # offline: network access is blocked in tests
 uv run ruff check .
 ```
 
-Build the bronze layer into `data/lake` (git ignored):
-
 ```bash
-# current month and the previous one (default window from config/pipeline.yml)
-uv run cvm-lake run --env dev --target local
+# current and previous month into data/lake (git ignored)
+uv run cvm-lake run --env dev
 
-# backfill a range; months before 2021 come from the CVM HIST yearly archives
+# a backfill; months before 2021 come from the CVM yearly archives
 uv run cvm-lake run --env dev --months 202301-202312
 
-# one source only, ignoring the manifest
-uv run cvm-lake run --env dev --sources bcb_ptax --months 202003 --force
+# rebuild silver, gold, anomalies and reporting from local bronze, no downloads
+uv run cvm-lake run --env dev --months 202310 --no-extract
 
-# rebuild silver and gold from the local bronze, no downloads
-uv run cvm-lake run --env dev --months 202003 --no-extract
+# against the dev Hugging Face repo, without publishing
+HF_OWNER=<owner> HF_TOKEN=<dev token> uv run cvm-lake run --env dev --target hf --out data/hf-dev --dry-run
 ```
 
-The run prints a report per layer and exits with code 1 when a blocking quality check fails.
+The run prints a report per layer and exits with 1 when a blocking quality check fails.
+`data/lake/_manifest.json` holds the state: unchanged source files are not downloaded again.
 
-Evaluate the anomaly detector with injected errors on a local lake (needs silver of the
-scored months, the 3 months before them and, if available, the month after):
+Dashboard: see [dashboard/README.md](dashboard/README.md).
+
+## Query the lake
+
+Every table of the public dataset can be queried without cloning anything.
+
+**Hugging Face Data Studio** (SQL console): open `huggingface.co/datasets/<owner>/cvm-fundos-lake`,
+pick a config (`daily_flows`, `returns_brl_usd`, `anomalies`, `restatements`, `fund_daily`,
+`fund_registry`, `ptax_daily`) and query it in the browser.
+
+**DuckDB**:
+
+```sql
+CREATE SECRET hf (TYPE huggingface, TOKEN 'hf_...');  -- any read token
+
+-- assets under management per peer group on the last day of 2025
+SELECT peer_group, round(sum(aum) / 1e9, 1) AS aum_brl_bn
+FROM read_parquet('hf://datasets/<owner>/cvm-fundos-lake/gold/daily_flows/*/*.parquet',
+                  hive_partitioning = true)
+WHERE dt = DATE '2025-12-30' AND NOT coalesce(is_fic, false)
+GROUP BY ALL ORDER BY 2 DESC;
+
+-- high severity anomalies of a month
+SELECT dt, fund_id, anomaly_type, score
+FROM 'hf://datasets/<owner>/cvm-fundos-lake/gold/anomalies/ano_mes=202610/part-0.parquet'
+WHERE severity = 'high' ORDER BY score DESC LIMIT 20;
+
+-- a partition as it was at an earlier commit (commit ids are in _manifest.json)
+SELECT count(*) FROM 'hf://datasets/<owner>/cvm-fundos-lake@<commit>/silver/fund_daily/ano_mes=202609/part-0.parquet';
+```
+
+**Polars** (`pip install polars`; reads `HF_TOKEN` from the environment):
+
+```python
+import polars as pl
+
+returns = pl.scan_parquet(
+    "hf://datasets/<owner>/cvm-fundos-lake/gold/returns_brl_usd/**/*.parquet",
+    hive_partitioning=True,
+)
+(
+    returns.filter(pl.col("peer_group") == "Ações")
+    .group_by("dt")
+    .agg(pl.col("ret_brl").median(), pl.col("ret_usd").median())
+    .sort("dt")
+    .collect()
+)
+```
+
+## Anomaly detection and experiments
+
+Layers, anomaly types and severity, the calibration history and the evaluation method are in
+[docs/anomaly_detection.md](docs/anomaly_detection.md). In short: rules plus robust z scores of
+the fund's own returns, an accounting identity residual and the excess return over peers, all
+silenced on market wide moves, plus an Isolation Forest for low severity leads. Without labels,
+the detector is evaluated by injecting errors (decimal shifts, glitches, equity jumps, stale
+quotas, ...) into a copy of the data; CI enforces recall floors on a synthetic panel. Restatements
+published by CVM are kept as weak labels.
+
+Reproducible experiments (fixed seeds, versioned configs, results with config hashes and the git
+commit):
 
 ```bash
-uv run cvm-lake evaluate --lake data/lake --months 202609 \
+uv run cvm-lake evaluate --lake data/lake --months 202609,202610 \
   --experiment config/experiments/v1_baselines.yml --out experiments/results
 ```
 
-Train the Isolation Forest on a local lake (needs 10 months of silver) and use it:
+## Costs
 
-```bash
-uv run cvm-lake train --env dev --lake data/lake --eval-month 202609 --out model_out
-uv run cvm-lake run --env dev --months 202610 --no-extract --model-dir model_out
-```
+Zero, with no credit card on any account:
 
-Against Hugging Face (needs `HF_OWNER` and `HF_TOKEN`, see [docs/setup.md](docs/setup.md)):
+| Piece | Why it is free |
+|---|---|
+| GitHub Actions | standard hosted runners are free and unlimited for public repositories |
+| GitHub Pages, Issues | free for public repositories |
+| Hugging Face storage | public datasets and models are free; the private dev repos only hold a year or so (check your private storage quota) |
+| Data | CVM and BCB open data, no keys |
+| Compute | DuckDB, scikit-learn and Observable Framework run inside the runner |
 
-```bash
-uv run cvm-lake run --env dev --target hf --out data/hf-dev --dry-run
-```
+The limits that matter are operational, not financial: a job runs at most 6 hours (ours are
+capped at 2), scheduled workflows pause after 60 days without activity (`keepalive`), and the
+Hugging Face Hub rate limits commits (one per run is far below it).
 
-The run is incremental. `data/lake/_manifest.json` stores `Last-Modified`, `ETag` and a SHA-256
-per source partition, so unchanged months are skipped without downloading. A source that is
-down is skipped with a warning; a source whose file format changed fails the run.
+## What would change in a real enterprise
 
-Query the result with DuckDB:
+The design choices that would stay: medallion layers, idempotent partition rewrites, an explicit
+pipeline state, quality gates that block publishing, environment separation with promotion by
+pull request, and evaluating detectors by injecting known errors. What would change:
 
-```sql
--- median daily return of equity funds during the March 2020 crash, in BRL and USD
-SELECT dt, median(ret_brl) AS brl, median(ret_usd) AS usd
-FROM read_parquet('data/lake/gold/returns_brl_usd/*/*.parquet', hive_partitioning = true)
-WHERE peer_group = 'Ações' AND dt BETWEEN '2020-03-09' AND '2020-03-13'
-GROUP BY dt ORDER BY dt;
-```
+| Here | In an enterprise |
+|---|---|
+| Parquet files on a Hugging Face repo, `_manifest.json` as state | object storage (S3, ADLS, GCS) with a table format (Apache Iceberg or Delta Lake): ACID commits, time travel, schema evolution and partition evolution instead of a hand made manifest |
+| repo commits as the only history | a catalog (Unity Catalog, AWS Glue, Polaris, Nessie) with lineage, ownership, access policies and discovery |
+| GitHub Actions schedules | an orchestrator (Airflow, Dagster, Prefect) with backfills, retries per task, sensors on source updates, SLAs and a run history |
+| DuckDB in a runner | DuckDB or Polars still works for this volume; at larger scale Spark, Trino or a warehouse (Snowflake, BigQuery, Databricks SQL) |
+| fine grained tokens in GitHub secrets | short lived credentials via OIDC federation and a secrets manager; least privilege roles per job |
+| quality checks in Python | a declared data contract per table and a quality framework (Great Expectations, Soda, dbt tests) with results stored and trended |
+| Issue comments as alerts | routing to on call (PagerDuty, Opsgenie, Teams or Slack) with severity, ownership and acknowledgement |
+| skops files in a model repo | a model registry (MLflow, SageMaker, Vertex) with stages, approvals and monitoring of drift and alarm rates |
+| restatements as appended rows | change data capture from the provider, bitemporal tables (valid time and system time) |
+| static dashboard | a governed BI layer (Power BI, Looker, Superset) on a semantic model, with row level security |
+| one person owns everything | separate owners for ingestion, platform, models and consumers; incident and change management |
+
+## Repository
+
+| Path | Content |
+|---|---|
+| `src/cvm_lake/` | the pipeline (`cvm-lake` command) |
+| `config/` | pipeline, anomaly thresholds, experiments |
+| `dashboard/` | Observable Framework site |
+| `tests/` | offline tests and fixtures |
+| `.github/workflows/` | CI, ETL, training, Pages, keepalive |
+| [docs/architecture.md](docs/architecture.md) | diagrams, run sequence, code map |
+| [docs/sources.md](docs/sources.md) | what the source files really look like |
+| [docs/decisions.md](docs/decisions.md) | 34 architecture decision records |
+| [docs/anomaly_detection.md](docs/anomaly_detection.md) | detector, evaluation, calibration history |
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
-
-## Docs
-
-- [docs/sources.md](docs/sources.md): what the source files really look like
-- [docs/decisions.md](docs/decisions.md): architecture decision records
-- [docs/setup.md](docs/setup.md): one time manual setup (Hugging Face, GitHub)
-- [docs/anomaly_detection.md](docs/anomaly_detection.md): anomaly layers, types, severity
+MIT, see [LICENSE](LICENSE). The data is republished from CVM and Banco Central do Brasil open
+data; check their terms before reuse.
