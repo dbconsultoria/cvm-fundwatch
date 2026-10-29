@@ -1,0 +1,65 @@
+name: train
+
+on:
+  schedule:
+    # Sunday morning, after the Saturday ETL with its 13 month lookback.
+    - cron: "17 6 * * 0"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which model to train
+        type: choice
+        options: [dev, prod]
+        default: dev
+      eval_month:
+        description: "Held out evaluation month, e.g. 202609. Empty: the last complete month"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      dev: ${{ steps.plan.outputs.dev }}
+      prod: ${{ steps.plan.outputs.prod }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_ENV: ${{ inputs.environment }}
+        run: |
+          if [ "$EVENT" = "schedule" ]; then
+            dev=true; prod=true
+          else
+            dev=false; prod=false
+            case "$INPUT_ENV" in
+              dev) dev=true ;;
+              prod) prod=true ;;
+              *) echo "::error::unknown environment '$INPUT_ENV'"; exit 1 ;;
+            esac
+          fi
+          { echo "dev=$dev"; echo "prod=$prod"; } >> "$GITHUB_OUTPUT"
+
+  dev:
+    needs: plan
+    if: needs.plan.outputs.dev == 'true'
+    uses: ./.github/workflows/train-env.yml
+    with:
+      env: dev
+      branch: development
+      eval_month: ${{ inputs.eval_month }}
+    secrets: inherit
+
+  prod:
+    needs: plan
+    if: needs.plan.outputs.prod == 'true'
+    uses: ./.github/workflows/train-env.yml
+    with:
+      env: prod
+      branch: main
+      eval_month: ${{ inputs.eval_month }}
+    secrets: inherit

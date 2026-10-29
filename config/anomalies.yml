@@ -49,3 +49,21 @@ mad_floor:
 alerts:
   budget_per_day: 20       # at most this many high alerts per reference date
   max_age_days: 10         # only alert on dates this recent (backfills do not flood the Issue)
+
+# Layer 5 (ADR 0033): Isolation Forest over the layer features, trained weekly by train.yml.
+# Its findings are low severity and only where no other layer found anything.
+isolation_forest:
+  n_estimators: 200
+  max_samples: 256
+  seed: 20261029
+  train_months: 6          # months before the evaluation month
+  max_train_rows: 300000   # random sample of the training reports
+  threshold_seed: 101      # injections on the validation month (last training month): threshold
+  eval_seed: 202           # injections on the evaluation month (held out): champion vs challenger
+  max_clean_alarms_per_10k: 10   # the threshold is raised until the clean month respects this
+  eval_alarm_tolerance: 1.5      # held out month: up to 1.5x the budget (month to month noise)
+  injections:              # kinds the forest is meant to catch, per month
+    quota_glitch: 300
+    equity_jump: 300
+    stale_quota: 150
+    shareholder_spike: 150

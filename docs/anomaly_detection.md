@@ -1,8 +1,8 @@
 # Anomaly detection
 
 Version `v1-rules-robust` (config: `config/anomalies.yml`, code: `src/cvm_lake/anomalies/`).
-Rules and three statistical layers with fixed thresholds. Phase 5 adds the evaluation harness
-(synthetic injection, restatements as weak labels), Phase 6 the Isolation Forest.
+Rules, three statistical layers with fixed thresholds, and an Isolation Forest retrained
+weekly (layer 5). Evaluation: synthetic injection and restatements as weak labels.
 
 ## Goal
 
@@ -45,6 +45,8 @@ their MAD is close to zero and any tiny move would look like an outlier.
 4. **Peer context** (`l4`): |z_excess| > 8. The excess return is scaled by the fund's own history
    of excess returns: a fund that always tracks its peers loosely is not an outlier.
 
+5. **Isolation Forest**: see below. Low severity only, where layers 1 to 4 found nothing.
+
 Decimal shift: quota or equity ratio within 2.3% of 10^k, k in ±1..±3. The report after a shift
 that undoes it is an `echo`.
 
@@ -73,6 +75,7 @@ crash does not break the accounting identity, an error does.
 | `distribution_event` | negative return outlier that the equity follows (residual < 0.2%) and that the next report does not revert: amortization, income distribution, performance fee | low |
 | `decimal_shift_echo` | the report after a decimal shift that undoes it | low |
 | `fund_closing` | equity goes to zero | low |
+| `isolation_forest` | forest score >= its threshold, no other finding on the report | low |
 
 Persistent conditions (impossible values, missing values) are reported on the first report of
 the streak only. Funds with fewer than 30 prior reports get rules and the decimal shift check
@@ -119,6 +122,31 @@ Calibration history, so the evaluation stays honest:
 
 Because of step 3, **March 2020 is in-sample for v1**. Phase 5 must use other stress periods as
 holdout for the claim "market wide moves are not flagged".
+
+## Layer 5: Isolation Forest
+
+Features per report with history, log scaled: |z_return| and |z_excess| (both 0 on market
+moves), |residual|, (subscriptions + redemptions) / previous equity, |ln(shareholder ratio)|,
+reports since the quota changed. Code: `anomalies/model.py`, `anomalies/train.py`.
+
+Weekly training (`train.yml`, `cvm-lake train`), for the last complete month E:
+
+| Step | Months | Rule |
+|---|---|---|
+| fit | the 6 months before E | 200 trees, max_samples 256, at most 300,000 sampled reports, fixed seed |
+| threshold | E-1 with injected errors (seed 101) | best F1, then raised to at most 10 clean alarms per 10k |
+| compare | E, held out, other injected errors (seed 202) | average precision, challenger vs champion |
+| promote | | higher average precision and at most 15 clean alarms per 10k on E |
+
+The injected kinds are the ones the forest is for: quota glitches, equity jumps, stale quota,
+shareholder spikes. The threshold comes from these results, not from `contamination`.
+
+The model repo (`<owner>/cvm-fundos-anomaly[-dev]`) holds `model.skops`, `model.json`
+(threshold, features, months, seeds, library versions), `metrics.json`, `decision.json` and a
+model card. The ETL loads the current champion at the start of each run.
+
+Smoke run on real data (2 training months only, evaluation month 2026-10 with the crash):
+average precision 0.42, 10.9 clean alarms per 10k, 159 low findings added to the month.
 
 ## Evaluation (Phase 5)
 

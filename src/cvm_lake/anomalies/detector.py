@@ -18,6 +18,7 @@ import pyarrow as pa
 
 from cvm_lake import gold
 from cvm_lake.anomalies import rules
+from cvm_lake.anomalies.model import ForestModel, feature_rows
 from cvm_lake.anomalies.settings import AnomalyConfig
 from cvm_lake.db import copy_to_parquet, lit, one
 from cvm_lake.periods import month_bounds, shift_month
@@ -115,14 +116,36 @@ def build_features(con: duckdb.DuckDBPyConnection, root: Path, ym: str, cfg: Ano
     con.execute(rules.flags_sql(cfg))
 
 
+def _forest_scores(con: duckdb.DuckDBPyConnection, forest: ForestModel) -> None:
+    """Temp table ``forest_scores`` for the reports of ``month_flags`` with history."""
+    keys, matrix = feature_rows(con, "month_flags")
+    scores = forest.score(matrix)
+    table = pa.table(
+        {
+            "cnpj": [k[0] for k in keys],
+            "subclass_id": [k[1] for k in keys],
+            "dt": pa.array([k[2] for k in keys], pa.string()).cast(pa.date32()),
+            "forest_score": pa.array(scores, pa.float64()),
+        }
+    )
+    con.register("forest_scores_arrow", table)
+    con.execute("CREATE OR REPLACE TEMP TABLE forest_scores AS SELECT * FROM forest_scores_arrow")
+    con.unregister("forest_scores_arrow")
+
+
 def detect_month(
     con: duckdb.DuckDBPyConnection,
     root: Path,
     ym: str,
     cfg: AnomalyConfig,
     run_id: str,
+    forest: ForestModel | None = None,
 ) -> AnomalyStats:
-    """Needs ``gold.load_registry`` on ``con`` and silver fund_daily of ``ym`` in ``root``."""
+    """Needs ``gold.load_registry`` on ``con`` and silver fund_daily of ``ym`` in ``root``.
+
+    With ``forest``, reports whose Isolation Forest score reaches its threshold and that no
+    other layer flagged become ``isolation_forest`` rows, low severity (ADR 0033).
+    """
     build_features(con, root, ym, cfg)
     start, end = month_bounds(ym)
     in_month = f"dt BETWEEN DATE '{start}' AND DATE '{end}'"
@@ -147,6 +170,26 @@ def detect_month(
         LEFT JOIN month_flags f USING (cnpj, subclass_id, dt)
         """
 
+    con.execute(f"CREATE OR REPLACE TEMP TABLE layer_rows AS {detected}")
+    detected = "SELECT *, NULL::VARCHAR AS row_model FROM layer_rows"
+    if forest is not None:
+        _forest_scores(con, forest)
+        tag = forest.tag.replace("'", "''")
+        threshold = f"CAST('{float(forest.threshold)!r}' AS DOUBLE)"  # also 'inf' and '-inf'
+        detected += f"""
+        UNION ALL
+        SELECT f.cnpj, f.subclass_id, f.dt, 'isolation_forest', s.forest_score, 'low',
+               f.peer_group,
+               to_json(struct_pack({features}, forest_score := s.forest_score,
+                                   forest_threshold := {threshold}))::VARCHAR,
+               '{tag}'
+        FROM month_flags f
+        JOIN forest_scores s USING (cnpj, subclass_id, dt)
+        WHERE s.forest_score >= {threshold}
+          AND NOT EXISTS (SELECT 1 FROM layer_rows l WHERE l.cnpj = f.cnpj
+                          AND l.subclass_id = f.subclass_id AND l.dt = f.dt)
+        """
+
     previous = root / anomalies_path(ym)
     if previous.exists():
         prior = f"SELECT fund_id, class_id, dt, anomaly_type, first_seen_run FROM {lit(previous)}"
@@ -164,7 +207,8 @@ def detect_month(
         WITH d AS ({detected}), p AS ({prior})
         SELECT d.cnpj AS fund_id, d.subclass_id AS class_id, d.dt, d.anomaly_type,
                d.score, d.severity, d.peer_group, d.features,
-               '{model}' AS model_version,
+               CASE WHEN d.row_model IS NULL THEN '{model}'
+                    ELSE '{model}+' || d.row_model END AS model_version,
                coalesce(p.first_seen_run, '{run}') AS first_seen_run
         FROM d
         LEFT JOIN p ON p.fund_id = d.cnpj AND p.class_id = d.subclass_id AND p.dt = d.dt
@@ -184,7 +228,10 @@ def detect_month(
         con,
         f"SELECT count(*) FROM {path} WHERE severity = 'high' AND first_seen_run = '{run}'",
     )[0]
-    con.execute("DROP TABLE month_flags; DROP TABLE flags; DROP TABLE features; DROP TABLE base")
+    con.execute(
+        "DROP TABLE month_flags; DROP TABLE flags; DROP TABLE features; DROP TABLE base;"
+        " DROP TABLE layer_rows; DROP TABLE IF EXISTS forest_scores"
+    )
     return AnomalyStats(
         month=ym,
         rows=rows,

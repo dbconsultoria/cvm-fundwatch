@@ -41,16 +41,18 @@ class LakeStore(Protocol):
 class HfStore:
     """A dataset repo on the Hub. Every call is authenticated, reads included."""
 
+    repo_type = "dataset"
+
     def __init__(self, repo_id: str, token: str, api: HfApi | None = None) -> None:
         self.repo_id = repo_id
         self._api = api if api is not None else HfApi(token=token)
 
     def verify(self, env_name: str) -> None:
         try:
-            info = self._api.repo_info(self.repo_id, repo_type="dataset")
+            info = self._api.repo_info(self.repo_id, repo_type=self.repo_type)
         except RepositoryNotFoundError as exc:
             raise GuardError(
-                f"dataset repo {self.repo_id} not found or token has no access"
+                f"{self.repo_type} repo {self.repo_id} not found or token has no access"
             ) from exc
         expected = EXPECTED_PRIVATE[env_name]
         if bool(info.private) != expected:
@@ -58,7 +60,7 @@ class HfStore:
             raise GuardError(f"{env_name} repo {self.repo_id} must be {want}")
 
     def head(self) -> HeadCommit | None:
-        commits = self._api.list_repo_commits(self.repo_id, repo_type="dataset")
+        commits = self._api.list_repo_commits(self.repo_id, repo_type=self.repo_type)
         if not commits:
             return None
         return HeadCommit(sha=commits[0].commit_id, title=commits[0].title)
@@ -69,7 +71,7 @@ class HfStore:
             return
         self._api.snapshot_download(
             self.repo_id,
-            repo_type="dataset",
+            repo_type=self.repo_type,
             revision=revision,
             local_dir=dest,
             allow_patterns=paths,
@@ -82,9 +84,23 @@ class HfStore:
             self.repo_id,
             operations,
             commit_message=message,
-            repo_type="dataset",
+            repo_type=self.repo_type,
             parent_commit=parent,
         )
         sha = getattr(info, "oid", None)
         log.info("committed %d files to %s: %s", len(paths), self.repo_id, sha)
         return sha
+
+
+class HfModelStore(HfStore):
+    """The model repo of the Isolation Forest: same rules (visibility, pinned commits)."""
+
+    repo_type = "model"
+
+    def download_model(self, dest: Path) -> bool:
+        """Download the current model into ``dest``. False when the repo has no model yet."""
+        head = self.head()
+        if head is None:
+            return False
+        self.download(["model.skops", "model.json"], dest, head.sha)
+        return (dest / "model.skops").exists() and (dest / "model.json").exists()

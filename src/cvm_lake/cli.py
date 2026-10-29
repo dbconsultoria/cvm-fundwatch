@@ -10,7 +10,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cvm_lake import __version__
+from cvm_lake import __version__, modelops
 from cvm_lake.anomalies import evaluate
 from cvm_lake.anomalies.report import render_alerts
 from cvm_lake.bronze import SOURCES
@@ -79,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="write new high severity anomalies (Markdown) here; nothing is written on a dry "
         "run, a failed run or when there are none",
     )
+    run.add_argument(
+        "--model-dir",
+        type=Path,
+        help="Isolation Forest to use (default: the champion in the HF model repo, hf target)",
+    )
     run.add_argument("-v", "--verbose", action="store_true")
 
     ev = sub.add_parser(
@@ -90,6 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--out", type=Path, default=Path("experiments/results"))
     ev.add_argument("--anomaly-config", type=Path, help="default: config/anomalies.yml")
     ev.add_argument("-v", "--verbose", action="store_true")
+    modelops.add_parsers(sub)
     return parser
 
 
@@ -155,6 +161,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         ) as client,
         tempfile.TemporaryDirectory(prefix="cvm-lake-") as work,
     ):
+        forest = None
+        if store is not None or args.model_dir is not None:
+            forest = modelops.load_forest(
+                settings.environment, os.environ, args.model_dir, Path(work)
+            )
         if store is None:
             manifest_path = root / MANIFEST_NAME
             manifest = Manifest.load(manifest_path)
@@ -170,6 +181,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     client=client,
                     work_dir=Path(work),
                     force=args.force,
+                    forest=forest,
                 )
             finally:
                 manifest.save(manifest_path)
@@ -188,6 +200,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     work_dir=Path(work),
                     dry_run=args.dry_run,
                     force=args.force,
+                    forest=forest,
                 )
             except PublishError as exc:
                 log.error("publish: %s", exc)
@@ -219,7 +232,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not args.verbose:
         logging.getLogger("httpx").setLevel(logging.WARNING)
-    return cmd_evaluate(args) if args.command == "evaluate" else cmd_run(args)
+    commands = {
+        "run": cmd_run,
+        "evaluate": cmd_evaluate,
+        "train": modelops.cmd_train,
+        "publish-model": modelops.cmd_publish_model,
+    }
+    return commands[args.command](args)
 
 
 if __name__ == "__main__":

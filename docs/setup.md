@@ -21,7 +21,14 @@ here needs a credit card. Replace `<owner>` with your Hugging Face user or organ
 3. Optional: check your private storage quota in the HF billing/usage page before a large dev
    backfill. The prod repo is public and the dev repo only needs a few months.
 
-(The model repos for Phase 6 come later.)
+4. Create two **model** repositories (New, Model) for the Isolation Forest:
+   - `<owner>/cvm-fundos-anomaly-dev`, **private**
+   - `<owner>/cvm-fundos-anomaly`, **public**
+5. Create two more fine grained tokens, used by training and read by the ETL:
+   - `cvm-fundwatch-model-dev`: write access to `<owner>/cvm-fundos-anomaly-dev`, read access
+     to `<owner>/cvm-fundos-lake-dev`.
+   - `cvm-fundwatch-model-prod`: write access to `<owner>/cvm-fundos-anomaly`, read access to
+     `<owner>/cvm-fundos-lake`.
 
 ## 2. GitHub repository
 
@@ -39,8 +46,8 @@ Settings, Environments, New environment, three times:
 
 | Environment | Deployment branches | Required reviewers | Secret | Variable |
 |---|---|---|---|---|
-| `dev` | Selected branches: `main`, `development` | none | `HF_TOKEN` = dev token | `CVM_LAKE_ENV` = `dev` |
-| `prod` | Selected branches: `main` | none | `HF_TOKEN` = prod token | `CVM_LAKE_ENV` = `prod` |
+| `dev` | Selected branches: `main`, `development` | none | `HF_TOKEN` = dev token, `HF_MODEL_TOKEN` = dev model token | `CVM_LAKE_ENV` = `dev` |
+| `prod` | Selected branches: `main` | none | `HF_TOKEN` = prod token, `HF_MODEL_TOKEN` = prod model token | `CVM_LAKE_ENV` = `prod` |
 | `prod-approval` | Selected branches: `main` | you | none | none |
 
 Why `dev` allows `main`: the schedule always runs from the default branch. The dev job then
@@ -77,8 +84,13 @@ Actions, etl, Run workflow:
    months. Run them oldest first: gold of the first month of a range reads silver of the month
    before, which the previous range published.
 
-From then on the schedule runs Monday to Saturday at 17:23 UTC for both environments, with a
-13 month lookback on Saturdays.
+7. Once dev has at least 10 months of history (6 training months, 3 history months, the
+   evaluation month), run Actions, train, environment `dev`. The first model is published when
+   it respects the alarm budget. Then the same for `prod`; publishing waits for your approval.
+
+From then on the ETL runs Monday to Saturday at 17:23 UTC for both environments, with a 13 month
+lookback on Saturdays, and training runs on Sundays at 06:17 UTC. Until a model exists, the
+Isolation Forest layer is off and everything else works.
 
 ## 6. Local runs against Hugging Face
 

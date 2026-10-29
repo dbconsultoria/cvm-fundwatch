@@ -13,6 +13,7 @@ from pathlib import Path
 
 from cvm_lake import bronze, gold, quality, silver
 from cvm_lake.anomalies.detector import AnomalyStats, detect_month
+from cvm_lake.anomalies.model import ForestModel
 from cvm_lake.anomalies.report import Alert, select_alerts
 from cvm_lake.anomalies.restatements import (
     RestatementStats,
@@ -64,6 +65,7 @@ def run_pipeline(
     work_dir: Path,
     force: bool = False,
     anomaly_config: AnomalyConfig | None = None,
+    forest: ForestModel | None = None,
 ) -> RunReport:
     report = RunReport(run_id=run_id, months=months)
     anomaly_cfg = anomaly_config or load_anomaly_config()
@@ -117,7 +119,7 @@ def run_pipeline(
         report.checks += quality.check_gold(gold_stats, cfg)
 
     for ym in built:
-        anomaly_stats = detect_month(con, root, ym, anomaly_cfg, run_id)
+        anomaly_stats = detect_month(con, root, ym, anomaly_cfg, run_id, forest)
         report.anomalies.append(anomaly_stats)
         report.checks += quality.check_anomalies(con, root, anomaly_stats)
     report.alerts = select_alerts(con, root, built, run_id, today, anomaly_cfg)

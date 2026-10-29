@@ -48,6 +48,8 @@ def test_no_untrusted_expressions_in_scripts(path: Path) -> None:
 @pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
 def test_jobs_have_timeouts(path: Path) -> None:
     for name, job in _load(path.name)["jobs"].items():
+        if "uses" in job:  # a call to a reusable workflow: its jobs carry the timeouts
+            continue
         assert "timeout-minutes" in job, name
 
 
@@ -78,3 +80,29 @@ def test_etl_design() -> None:
     upload = next(s for s in etl["steps"] if "upload-artifact" in s.get("uses", ""))
     assert upload["with"]["retention-days"] == 7
     assert "DRY_RUN == 'true'" in upload["if"]
+
+
+def test_train_design() -> None:
+    wf = _load("train.yml")
+    assert wf["permissions"] == {"contents": "read"}
+    assert [s["cron"] for s in wf["on"]["schedule"]] == ["17 6 * * 0"]
+    for env, branch in (("dev", "development"), ("prod", "main")):
+        job = wf["jobs"][env]
+        assert job["uses"] == "./.github/workflows/train-env.yml"
+        assert job["with"]["env"] == env and job["with"]["branch"] == branch
+
+    called = _load("train-env.yml")
+    jobs = called["jobs"]
+    assert jobs["train"]["environment"] == "${{ inputs.env }}"
+    assert jobs["train"]["env"]["HF_MODEL_TOKEN"] == "${{ secrets.HF_MODEL_TOKEN }}"
+    assert jobs["approve"]["environment"] == "prod-approval"
+    assert "inputs.env == 'prod'" in jobs["approve"]["if"]
+    assert "needs.train.outputs.promote == 'true'" in jobs["publish"]["if"]
+    assert jobs["publish"]["needs"] == ["train", "approve"]
+    assert "secrets" not in str(jobs["approve"])
+
+
+def test_keepalive_covers_scheduled_workflows() -> None:
+    script = _load("keepalive.yml")["jobs"]["keepalive"]["steps"][0]["run"]
+    for name in ("etl.yml", "train.yml"):
+        assert name in script

@@ -364,3 +364,30 @@ Short ADR style entries. Status is `accepted`, `proposed` (waiting for review) o
   `flagged_before` turns "did we flag it before the correction?" into a single query. The old
   version itself stays readable at `hf://datasets/<repo>@<old_commit>/...`. Each daily run
   downloads the window's silver partitions (about 20 MB) to make the comparison.
+
+## 0033 Isolation Forest layer, training and promotion
+
+- Status: accepted
+- Decision:
+  - Layer 5 is an Isolation Forest over six per report features (|z return|, |z excess|,
+    |residual|, flows over equity, |shareholder log change|, reports since the quota changed),
+    log scaled. The two z features are zeroed on market moves, like layers 2 and 4: without
+    that, a smoke test on 2026-10 (crash month) gave 25.6 clean alarms per 10k instead of 10.9.
+  - Its findings are `isolation_forest`, low severity, only on reports no other layer flagged,
+    with `model_version` = `<rules version>+<forest tag>`.
+  - Training (weekly, `train.yml`): fit on the 6 months before the evaluation month E (the
+    last complete month), threshold = best F1 on errors injected into E-1, raised to at most 10
+    clean alarms per 10k; then challenger and champion are compared on average precision over
+    other errors injected into E (held out). Promotion needs a higher average precision and at
+    most 1.5 x the alarm budget on E (the threshold was fitted to the budget on E-1, so E alone
+    would reject about half of good models by chance).
+  - Models are stored with skops, not pickle: the prod model repo is public and the ETL loads
+    from it. Loading accepts only sklearn and numpy types and checks the feature list.
+  - A separate token per environment, `HF_MODEL_TOKEN` (write the model repo, read the dataset
+    repo). The ETL uses it read only; without it, or without a model, layer 5 is simply off.
+  - `train.yml` calls `train-env.yml` per environment. Publishing happens only when the
+    challenger wins; for prod it waits for a reviewer in `prod-approval` first. Model and
+    metrics are kept as a 30 day artifact either way.
+- Consequence: the forest can only add low severity findings, so it never changes alerts. A
+  real data smoke run (2 training months) took 2 minutes and added 159 low findings to 2026-10,
+  5 of them on the crash day.

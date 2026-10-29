@@ -1,0 +1,109 @@
+name: train-env
+
+# Trains the Isolation Forest for one environment and publishes it when the challenger beats the
+# champion (ADR 0033). Called by train.yml. A prod model waits for a reviewer in prod-approval.
+
+on:
+  workflow_call:
+    inputs:
+      env:
+        type: string
+        required: true
+      branch:
+        type: string
+        required: true
+      eval_month:
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: ${{ inputs.env }}
+    concurrency:
+      group: train-${{ inputs.env }}
+      cancel-in-progress: false
+    outputs:
+      promote: ${{ steps.train.outputs.promote }}
+    env:
+      HF_MODEL_TOKEN: ${{ secrets.HF_MODEL_TOKEN }}
+      HF_OWNER: ${{ vars.HF_OWNER }}
+      CVM_LAKE_ENV: ${{ vars.CVM_LAKE_ENV }}
+      ENV_NAME: ${{ inputs.env }}
+      EVAL_MONTH: ${{ inputs.eval_month }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.branch }}
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked --no-dev
+
+      - name: Train and compare with the champion
+        id: train
+        run: |
+          args=(train --env "$ENV_NAME" --target hf --lake lake --out model_out)
+          if [ -n "$EVAL_MONTH" ]; then args+=(--eval-month "$EVAL_MONTH"); fi
+          uv run --no-dev cvm-lake "${args[@]}"
+
+      - name: Keep the model and its metrics
+        uses: actions/upload-artifact@v7
+        with:
+          name: model-${{ inputs.env }}-${{ github.run_id }}
+          path: model_out
+          retention-days: 30
+
+  approve:
+    needs: train
+    if: needs.train.outputs.promote == 'true' && inputs.env == 'prod'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: prod-approval
+    steps:
+      - run: echo "Prod model promotion approved by a reviewer."
+
+  publish:
+    needs: [train, approve]
+    if: >-
+      always() && needs.train.result == 'success' && needs.train.outputs.promote == 'true' &&
+      (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.env }}
+    concurrency:
+      group: train-${{ inputs.env }}-publish
+      cancel-in-progress: false
+    env:
+      HF_MODEL_TOKEN: ${{ secrets.HF_MODEL_TOKEN }}
+      HF_OWNER: ${{ vars.HF_OWNER }}
+      CVM_LAKE_ENV: ${{ vars.CVM_LAKE_ENV }}
+      ENV_NAME: ${{ inputs.env }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.branch }}
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked --no-dev
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: model-${{ inputs.env }}-${{ github.run_id }}
+          path: model_out
+
+      - name: Publish to the model repo
+        run: uv run --no-dev cvm-lake publish-model --env "$ENV_NAME" --dir model_out

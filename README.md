@@ -4,8 +4,8 @@ A zero cost data pipeline for Brazilian investment fund data. It runs entirely o
 builds a bronze/silver/gold lake of Parquet files on Hugging Face datasets, detects anomalies in
 the daily fund reports, and publishes a static dashboard on GitHub Pages.
 
-> Status: Phase 5 (lake, publishing to Hugging Face, anomaly detection v1 with alerts,
-> evaluation harness, restatements). The ML layer and the dashboard come in later phases.
+> Status: Phase 6 (lake, publishing to Hugging Face, anomaly detection with alerts, evaluation
+> harness, restatements, weekly Isolation Forest training). The dashboard comes next.
 
 ## Sources
 
@@ -48,7 +48,8 @@ before it counts as done. See [docs/decisions.md](docs/decisions.md) for the rea
 |---|---|---|
 | `ci.yml` | push, pull request | ruff, pytest |
 | `etl.yml` | Mon to Sat 17:23 UTC, manual | runs the pipeline for `dev` (branch `development`) and `prod` (branch `main`) and commits to Hugging Face, one commit per run |
-| `keepalive.yml` | monthly | keeps the schedule enabled |
+| `train.yml` | Sundays 06:17 UTC, manual | trains the Isolation Forest per environment, compares it with the champion, publishes the winner to the HF model repo (prod after approval) |
+| `keepalive.yml` | monthly | keeps the schedules enabled |
 
 Manual runs default to a dry run: everything is built, nothing is published, and the output is
 kept as an artifact for 7 days. A manual run that writes to prod waits for a reviewer. Setup
@@ -88,6 +89,13 @@ scored months, the 3 months before them and, if available, the month after):
 ```bash
 uv run cvm-lake evaluate --lake data/lake --months 202609 \
   --experiment config/experiments/v1_baselines.yml --out experiments/results
+```
+
+Train the Isolation Forest on a local lake (needs 10 months of silver) and use it:
+
+```bash
+uv run cvm-lake train --env dev --lake data/lake --eval-month 202609 --out model_out
+uv run cvm-lake run --env dev --months 202610 --no-extract --model-dir model_out
 ```
 
 Against Hugging Face (needs `HF_OWNER` and `HF_TOKEN`, see [docs/setup.md](docs/setup.md)):

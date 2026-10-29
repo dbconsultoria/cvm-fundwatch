@@ -15,6 +15,20 @@ LAYERS = frozenset({"l2", "l3", "l4"})
 
 
 @dataclass(frozen=True)
+class ForestConfig:
+    n_estimators: int
+    max_samples: int
+    seed: int
+    train_months: int
+    max_train_rows: int
+    threshold_seed: int
+    eval_seed: int
+    max_clean_alarms_per_10k: float
+    eval_alarm_tolerance: float
+    injections: Mapping[str, int]
+
+
+@dataclass(frozen=True)
 class AnomalyConfig:
     model_version: str
     history_months: int
@@ -38,12 +52,28 @@ class AnomalyConfig:
     mad_floor: Mapping[str, float]
     budget_per_day: int
     max_age_days: int
+    forest: ForestConfig | None = None
     layers: frozenset[str] = frozenset({"l2", "l3", "l4"})
     robust: bool = True
     market_gate: bool = True
 
     def floor(self, peer_group: str) -> float:
         return self.mad_floor.get(peer_group, self.mad_floor["default"])
+
+
+def _forest(raw: dict) -> ForestConfig:
+    return ForestConfig(
+        n_estimators=int(raw["n_estimators"]),
+        max_samples=int(raw["max_samples"]),
+        seed=int(raw["seed"]),
+        train_months=int(raw["train_months"]),
+        max_train_rows=int(raw["max_train_rows"]),
+        threshold_seed=int(raw["threshold_seed"]),
+        eval_seed=int(raw["eval_seed"]),
+        max_clean_alarms_per_10k=float(raw["max_clean_alarms_per_10k"]),
+        eval_alarm_tolerance=float(raw["eval_alarm_tolerance"]),
+        injections={str(k): int(v) for k, v in raw["injections"].items()},
+    )
 
 
 def load_anomaly_config(path: Path | None = None) -> AnomalyConfig:
@@ -76,6 +106,7 @@ def load_anomaly_config(path: Path | None = None) -> AnomalyConfig:
             layers=frozenset(raw["layers"]),
             robust=bool(raw["robust_stats"]),
             market_gate=bool(raw["market_gate"]),
+            forest=_forest(raw["isolation_forest"]),
         )
     except (KeyError, TypeError, AttributeError, FileNotFoundError) as exc:
         raise ConfigError(f"invalid anomaly config {path}: {exc}") from exc

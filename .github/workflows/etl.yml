@@ -102,6 +102,8 @@ jobs:
       cancel-in-progress: false
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      # reads the champion Isolation Forest; without it the forest layer is off (ADR 0033)
+      HF_MODEL_TOKEN: ${{ secrets.HF_MODEL_TOKEN }}
       HF_OWNER: ${{ vars.HF_OWNER }}
       CVM_LAKE_ENV: ${{ vars.CVM_LAKE_ENV }}
       ENV_NAME: ${{ matrix.env }}

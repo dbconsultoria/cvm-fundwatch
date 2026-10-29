@@ -21,6 +21,7 @@ from pathlib import Path
 
 from cvm_lake import gold, silver
 from cvm_lake.anomalies.detector import anomalies_path
+from cvm_lake.anomalies.model import ForestModel
 from cvm_lake.anomalies.restatements import restatements_path
 from cvm_lake.anomalies.settings import load_anomaly_config
 from cvm_lake.bronze import Status
@@ -111,6 +112,7 @@ def run_on_store(
     work_dir: Path,
     dry_run: bool,
     force: bool = False,
+    forest: ForestModel | None = None,
 ) -> list[ChunkResult]:
     results: list[ChunkResult] = []
     chunks = chunk_months(months, settings.publish.max_months_per_commit)
@@ -140,6 +142,7 @@ def run_on_store(
             client=client,
             work_dir=work_dir,
             force=force,
+            forest=forest,
         )
         manifest.save(manifest_path)
         (root / CARD_NAME).write_text(
