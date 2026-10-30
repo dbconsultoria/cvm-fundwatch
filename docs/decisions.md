@@ -415,3 +415,18 @@ Short ADR style entries. Status is `accepted`, `proposed` (waiting for review) o
     request.
 - Consequence: the dashboard is as fresh as the last ETL and costs nothing to serve. Fund names
   were added to `silver/fund_registry` for the anomaly table.
+
+## 0035 Token layout and an optional approval gate
+
+- Status: accepted
+- Context: the first real setup was done by one person. Four tokens and a required reviewer
+  were more ceremony than protection for a personal project.
+- Decision:
+  - Tokens need **write** on their repos (read only fails at the upload with a 403 on
+    `xet-write-token`). One token with write on all four repos is a supported layout; one per
+    environment (dev repos, prod repos) stays the recommended one for teams.
+  - `prod-approval` without a reviewer is allowed: the `approve` job then passes on its own.
+  - The guard does not depend on token scope: dev only targets `-dev` repos, prod only runs
+    from `main` with a public repo (ADR 0022), whatever the token can reach.
+- Consequence: with one token, unreviewed code on `development` runs with a credential that can
+  write prod. Accepted here; for a team, split the tokens and add a reviewer.

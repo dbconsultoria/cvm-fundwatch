@@ -7,40 +7,22 @@ the daily fund reports, and publishes a static dashboard on GitHub Pages.
 - **Sources**: CVM daily reports of every investment fund since 2000 (today about 25,000
   classes and 500,000 rows a month), the CVM fund registry, and the BCB PTAX dollar rate.
 - **Lake**: Parquet on a Hugging Face dataset repo, one atomic commit per run, queryable from the
-  Hugging Face Data Studio, DuckDB or Polars.
+  Hugging Face Data Studio, DuckDB, DBeaver or Polars.
 - **Anomaly detection**: rules, robust statistics, an accounting identity check, peer context
   and an Isolation Forest, evaluated with injected errors. Market wide moves are not flagged.
-- **Dashboard**: `https://dbconsultoria.github.io/cvm-fundwatch/` (after the first prod run).
+- **Dashboard**: [dbconsultoria.github.io/cvm-fundwatch](https://dbconsultoria.github.io/cvm-fundwatch/)
+- **Data**: [huggingface.co/datasets/dbconsultoria/cvm-fundos-lake](https://huggingface.co/datasets/dbconsultoria/cvm-fundos-lake)
 
 No servers, no databases, no credit card.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  CVM["CVM open data"] --> ETL
-  BCB["BCB PTAX API"] --> ETL
-  subgraph gha["GitHub Actions"]
-    ETL["etl.yml<br/>DuckDB in the runner"]
-    TRAIN["train.yml<br/>Isolation Forest"]
-    PAGES["pages.yml<br/>dashboard build"]
-  end
-  subgraph hf["Hugging Face"]
-    DS[("dataset repo<br/>bronze / silver / gold")]
-    MR[("model repo")]
-  end
-  DS -- "state + inputs" --> ETL
-  ETL -- "one commit per run" --> DS
-  MR -- champion --> ETL
-  DS --> TRAIN -- "if it wins" --> MR
-  DS -- gold/reporting --> PAGES --> SITE["GitHub Pages"]
-  ETL -- "new high findings" --> ISSUE["GitHub Issue"]
-```
+![cvm-fundwatch architecture: public sources, GitHub Actions, Hugging Face storage and outputs](docs/img/architecture.png)
 
 Every run: read the state (`_manifest.json`) and the partitions of its window from Hugging Face,
 download only source files that changed, rebuild the layers in DuckDB inside the runner, run
 quality checks, and push everything in one commit. A failed check publishes nothing. Details,
-diagrams and the code map: [docs/architecture.md](docs/architecture.md).
+Mermaid diagrams and the code map: [docs/architecture.md](docs/architecture.md).
 
 | Layer | Tables | Grain |
 |---|---|---|
@@ -61,11 +43,14 @@ diagrams and the code map: [docs/architecture.md](docs/architecture.md).
 
 Everything below is done once in the Hugging Face and GitHub web interfaces. `<owner>` is your
 Hugging Face user or organization; `<github user>` is the GitHub account that owns the repo.
+The steps follow the order of the first real setup of this project.
 
-### 1. Hugging Face: repos and tokens
+### 1. Hugging Face: account, repos and tokens
 
-1. Create four repositories (New, then Dataset or Model). The names are fixed by
-   `config/pipeline.yml`; the pipeline refuses to run if a visibility is wrong.
+1. Create a free account at huggingface.co (no credit card). Your username is `<owner>`.
+2. Create four repositories (top right **+ New**, then **Dataset** or **Model**). The names are
+   fixed by `config/pipeline.yml`, and the **type matters**: the anomaly repos are Models, not
+   Datasets. The pipeline refuses to run if a visibility is wrong.
 
    | Repository | Type | Visibility |
    |---|---|---|
@@ -74,37 +59,59 @@ Hugging Face user or organization; `<github user>` is the GitHub account that ow
    | `<owner>/cvm-fundos-anomaly-dev` | Model | private |
    | `<owner>/cvm-fundos-anomaly` | Model | public |
 
-2. Create four **fine grained** tokens (Settings, Access Tokens, Create new token,
-   Fine-grained). Under "Repositories permissions" select only the repos listed, tick the
-   access listed, leave everything else unticked. Copy each token when it is shown.
+   A repo created with the wrong type cannot be converted: delete it (repo Settings, Delete) and
+   create it again.
 
-   | Token | Write access | Read access |
+3. Create the tokens (avatar, **Settings, Access Tokens, Create new token**, tab
+   **Fine-grained**). Under "Repositories permissions" search each repo, add it and tick
+   **Write access to contents/settings of selected repos**. Read access alone is not enough:
+   the run builds everything and then fails at the upload with
+   `403 Forbidden ... xet-write-token`.
+
+   Two ways to organize them:
+
+   | Option | Tokens | Trade off |
    |---|---|---|
-   | `cvm-fundwatch-dev` | `cvm-fundos-lake-dev` | |
-   | `cvm-fundwatch-prod` | `cvm-fundos-lake` | |
-   | `cvm-fundwatch-model-dev` | `cvm-fundos-anomaly-dev` | `cvm-fundos-lake-dev` |
-   | `cvm-fundwatch-model-prod` | `cvm-fundos-anomaly` | `cvm-fundos-lake` |
+   | one token | write on all four repos | simplest; the dev job, which runs unreviewed code from `development`, also holds a token that can write prod |
+   | per environment (recommended for teams) | `cvm-fundwatch-dev`: write on the two `-dev` repos; `cvm-fundwatch-prod`: write on the two prod repos | prod credentials never reach the dev job |
+
+   A token value is shown **once**. Copy it straight into the GitHub secret (step 2). If you
+   lose it, use **Invalidate and refresh** on the token: same name and permissions, new value;
+   then update the GitHub secrets. Never paste a token into `.env.example` or any tracked file.
 
 ### 2. GitHub: repository settings
 
-In the GitHub repository (create it as **public** if it does not exist yet):
+The repository must be **public**: on the free plan, Environments and their secrets are not
+available for private repositories, and Actions minutes are unlimited only for public ones.
 
 1. **Settings, Actions, General**, Workflow permissions: "Read repository contents and packages
    permissions". Leave "Allow GitHub Actions to create and approve pull requests" unticked.
-2. **Settings, Secrets and variables, Actions, Variables**: repository variable
-   `HF_OWNER` = `<owner>`.
-3. **Settings, Pages**, Build and deployment, Source: **GitHub Actions**.
+2. **Settings, Secrets and variables, Actions**, tab **Variables**: repository variable
+   `HF_OWNER` = `<owner>`. It must be a repository variable (not only an environment one):
+   the dev, prod and pages jobs all read it.
+3. **Settings, Pages**, Build and deployment, Source: **GitHub Actions** (not "Deploy from a
+   branch"). Pages is set per repository, so other Pages sites of the same account are not
+   affected; this one is served at `https://<github user>.github.io/cvm-fundwatch/`. A custom
+   domain is optional and not needed.
 4. **Settings, Environments**, create three environments:
 
-   | Environment | Deployment branches | Required reviewers | Secrets | Variable |
+   | Environment | Deployment branches | Required reviewers | Secrets | Variables |
    |---|---|---|---|---|
-   | `dev` | selected: `main`, `development` | none | `HF_TOKEN` = dev token, `HF_MODEL_TOKEN` = model dev token | `CVM_LAKE_ENV` = `dev` |
-   | `prod` | selected: `main` | none | `HF_TOKEN` = prod token, `HF_MODEL_TOKEN` = model prod token | `CVM_LAKE_ENV` = `prod` |
-   | `prod-approval` | selected: `main` | yourself | none | none |
+   | `dev` | selected: `main`, `development` | none | `HF_TOKEN`, `HF_MODEL_TOKEN` | `CVM_LAKE_ENV` = `dev` |
+   | `prod` | selected: `main` | none | `HF_TOKEN`, `HF_MODEL_TOKEN` | `CVM_LAKE_ENV` = `prod` |
+   | `prod-approval` | selected: `main` | yourself (optional) | none | none |
 
-   `dev` allows `main` because scheduled workflows always start from the default branch; the
-   dev job then checks out `development`. Reviewers sit on `prod-approval`, not on `prod`, so
-   the daily prod run is not blocked while manual writes to prod still need an approval.
+   - `HF_TOKEN` writes the dataset, `HF_MODEL_TOKEN` writes the model repo and reads the
+     dataset. With the one token option both secrets hold the same value.
+   - `CVM_LAKE_ENV` goes under **Environment variables**, not secrets. If it is missing or
+     stored as a secret, the run stops with
+     `guard: GitHub Environment declares CVM_LAKE_ENV='', run asked for 'prod'`.
+   - `dev` allows `main` because scheduled workflows always start from the default branch; the
+     dev job then checks out `development`.
+   - `prod-approval` is the gate for manual writes to prod. Without a reviewer the gate passes
+     on its own, which is fine for a personal project: the code still refuses prod from any
+     branch but `main`, and manual runs default to a dry run.
+   - `github-pages` is created by GitHub on the first deployment and needs nothing.
 
 ### 3. Push the code
 
@@ -118,58 +125,97 @@ git push origin main:development
 Then **Settings, Rules, Rulesets**, a branch ruleset for `main`: require a pull request before
 merging, require the status checks `test` and `dashboard` (they appear after the first CI run),
 block force pushes, restrict deletions. Optionally a lighter one for `development` (require
-`test`, block force pushes). After the first Pages deployment, restrict the `github-pages`
-environment to `main` too.
+`test`, block force pushes).
 
-### 4. First dev runs
+### 4. Running a workflow by hand
 
-Actions, **etl**, Run workflow:
+**Actions** tab, pick the workflow in the **left menu** (`etl`, `train`, `pages`; the list in
+the middle only shows past runs), then **Run workflow** on the right:
 
-1. Branch `development`, environment `dev`, **dry run ticked**. Read the job summary (bronze
-   status, rows per month, anomalies, quality) and download the `lake-dev-...` artifact if you
-   want to look at the files.
-2. Same with **dry run unticked**. The dev dataset gets its first commit; open it on Hugging Face
-   and check the dataset viewer shows `daily_flows`.
-3. Backfill dev with about a year, e.g. `months` = `202501-202512`, dry run unticked. This gives
-   the anomaly layers their history and the forest something to train on.
+| Input | Meaning |
+|---|---|
+| Use workflow from | the branch the workflow file is read from: `development` for dev, `main` for prod |
+| environment | `dev` or `prod`; decides the lake, the tokens and the branch whose code runs |
+| Build everything, publish nothing | the **dry run**. **Ticked by default.** Untick it to write to Hugging Face |
+| months | a backfill range, e.g. `202501-202608`, at most 36 months. Empty: current and previous month |
+| lookback | months back from today when `months` is empty. Usually empty |
 
-### 5. Promote to prod
+The job page shows a summary: bronze status and rows per source, silver and gold checks,
+anomalies per month and severity, and the quality checks. A dry run also uploads the built
+files as the artifact `lake-<env>-<run id>` (kept 7 days). A real run ends with the Hugging
+Face commit it made.
 
-1. Open a pull request from `development` to `main`; merge when CI is green.
-2. Actions, etl, Run workflow, branch `main`, environment `prod`, dry run ticked, then unticked.
-   The unticked run waits for your approval in `prod-approval`.
-3. Backfill prod **oldest first**, one dispatch per range of **at most 36 months** (the job has a
-   2 hour limit and a month takes about 1 to 1.5 minutes): `200001-200212`, `200301-200512`, ...,
-   up to the current year. Each range is committed in 12 month chunks. Order matters: the first
-   month of a range reads the previous month's silver, published by the previous range.
-4. The first prod ETL triggers **pages**; the dashboard appears at
-   `https://<github user>.github.io/cvm-fundwatch/`.
+### 5. First dev runs
 
-### 6. Train the Isolation Forest
+All with branch `development` and environment `dev`:
 
-Once an environment has at least 10 months of history (6 training months, 3 history months, the
-evaluation month): Actions, **train**, Run workflow, environment `dev`, then `prod` (prod waits
-for approval before publishing). The job summary shows the model card: average precision,
-recall, precision and alarm rate against the current model. Until a model exists the forest
-layer is simply off.
+1. **Dry run** (box ticked, months empty). Checks the guard, the token, the repo visibility and
+   that CVM and BCB answer from GitHub's runners. On an empty repo the log shows
+   `No files matched allow_patterns`: expected, there is nothing to read yet.
+2. **Real run** (box unticked). The dev dataset gets its first commit: `bronze/`, `silver/`,
+   `gold/`, `_manifest.json` and a dataset card.
+3. **Backfill**, e.g. `months` = `202501-202608`, box unticked. About 6 minutes for 20 months,
+   committed in 12 month chunks.
+4. **Recompute the latest months** (months empty, box unticked). The first runs had no history
+   behind them, so most funds lacked the 30 prior reports the statistical layers need; this
+   rebuilds them with history.
+5. **Train** (workflow `train`, branch `development`, environment `dev`). Needs at least 10
+   months: 6 training months, 3 history months and the evaluation month (by default the last
+   complete month). The first model is published to `cvm-fundos-anomaly-dev`; from then on the
+   ETL log no longer says `Isolation Forest layer off`.
+
+### 6. Prod
+
+1. Open a pull request from `development` to `main`; merge when CI is green (skip it when the
+   branches are equal).
+2. **etl**, branch `main`, environment `prod`: dry run first, then box unticked. The real run
+   passes through `approve` (waiting for a reviewer if `prod-approval` has one) and makes the
+   first prod commit.
+3. **pages** starts after every ETL on `main`. Until the prod dataset has its first commit it
+   fails at "Download the reporting tables" on purpose, rather than deploying an empty site.
+   After the first real prod run it deploys the dashboard.
+4. **Backfill prod oldest first**, one dispatch at a time, waiting for each to finish: the
+   first month of a range reads the previous month's silver, published by the previous range.
+
+   | # | months | notes |
+   |---|---|---|
+   | 1 | `200001-200212` | about 1 minute: 2000 and 2001 hold 6 and 5 funds; coverage starts in 2002 |
+   | 2 | `200301-200512` | |
+   | 3 | `200601-200812` | |
+   | 4 | `200901-201112` | |
+   | 5 | `201201-201412` | |
+   | 6 | `201501-201712` | |
+   | 7 | `201801-202012` | |
+   | 8 | `202101-202312` | |
+   | 9 | `202401-` up to the month before the latest run | the latest two months are already there |
+
+   Runs get longer as the number of funds grows (today about 25,000 classes and 500,000 rows a
+   month). Avoid having a range running at 17:23 UTC: the scheduled run queues behind it.
+5. **Train prod** after range 9. Training reads the months right before the evaluation month,
+   so it fails until those exist; a failed training publishes nothing and the forest layer
+   stays off.
 
 ### 7. Day to day
 
 Nothing to do. The ETL runs Monday to Saturday at 17:23 UTC (after the CVM refresh and the PTAX
-publication), training on Sundays, the dashboard after each ETL. What to look at:
+publication) for both lakes, training on Sundays, the dashboard after each prod ETL. What to
+look at:
 
 | Signal | Meaning | Action |
 |---|---|---|
 | green run | published | none |
 | yellow run (warnings) | a source was down, or a soft check warned | none; the next run catches up |
 | red run, quality failed | a blocking check failed; nothing was published | read the step summary; rerun with dry run to inspect the artifact |
-| red run, guard (exit 2) | a variable, secret, token scope or repo visibility is wrong | fix the setting named in the log |
+| red run, guard (exit 2) | a variable, secret or repo visibility is wrong | fix the setting named in the log |
+| red run, `403 ... xet-write-token` | the token can read but not write the repo | give the token write access to that repo (step 1.3) |
 | red run, commit failed | something else wrote to the repo during the run | rerun |
+| red `pages` run before any prod commit | the prod dataset is still empty | none; it goes green after the first real prod run |
+| skipped `pages` run | the ETL that triggered it was a dev run | none |
 | Issue `[prod] High severity anomalies YYYY-MM` | new high findings (at most 20 per date) | read; details in `gold/anomalies` |
 | schedule stopped | GitHub disables schedules after 60 days without activity | `keepalive` re-enables them monthly; or enable `etl` in the Actions tab |
 
-Manual runs default to a dry run. A backfill is a manual run with `months`; a rerun of the
-same months is safe (idempotent).
+A rerun of the same months is safe (idempotent). GitHub only shows run logs to signed in users,
+even on a public repo.
 
 ## Run locally
 
@@ -191,9 +237,12 @@ uv run cvm-lake run --env dev --months 202301-202312
 # rebuild silver, gold, anomalies and reporting from local bronze, no downloads
 uv run cvm-lake run --env dev --months 202310 --no-extract
 
-# against the dev Hugging Face repo, without publishing
-HF_OWNER=<owner> HF_TOKEN=<dev token> uv run cvm-lake run --env dev --target hf --out data/hf-dev --dry-run
+# against the dev Hugging Face repo, without publishing (reads HF_OWNER and HF_TOKEN from .env)
+uv run --env-file .env cvm-lake run --env dev --target hf --out data/hf-dev --dry-run
 ```
+
+For runs against Hugging Face, copy `.env.example` to `.env` (git ignored) and fill in
+`HF_OWNER` and `HF_TOKEN` there. `.env.example` is tracked: keep its values empty.
 
 The run prints a report per layer and exits with 1 when a blocking quality check fails.
 `data/lake/_manifest.json` holds the state: unchanged source files are not downloaded again.
@@ -211,7 +260,8 @@ pick a config (`daily_flows`, `returns_brl_usd`, `anomalies`, `restatements`, `f
 **DuckDB**:
 
 ```sql
-CREATE SECRET hf (TYPE huggingface, TOKEN 'hf_...');  -- any read token
+-- optional for the public lake (avoids anonymous rate limits), required for the dev lake
+CREATE SECRET hf (TYPE huggingface, TOKEN 'hf_...');
 
 -- assets under management per peer group on the last day of 2025
 SELECT peer_group, round(sum(aum) / 1e9, 1) AS aum_brl_bn
@@ -324,10 +374,12 @@ pull request, and evaluating detectors by injecting known errors. What would cha
 | `config/` | pipeline, anomaly thresholds, experiments |
 | `dashboard/` | Observable Framework site |
 | `tests/` | offline tests and fixtures |
+| `scripts/make_duckdb.py` | DuckDB file with views over the lake, for DBeaver |
+| `database/` | the generated DuckDB file (git ignored) |
 | `.github/workflows/` | CI, ETL, training, Pages, keepalive |
 | [docs/architecture.md](docs/architecture.md) | diagrams, run sequence, code map |
 | [docs/sources.md](docs/sources.md) | what the source files really look like |
-| [docs/decisions.md](docs/decisions.md) | 34 architecture decision records |
+| [docs/decisions.md](docs/decisions.md) | 35 architecture decision records |
 | [docs/anomaly_detection.md](docs/anomaly_detection.md) | detector, evaluation, calibration history |
 
 ## License
