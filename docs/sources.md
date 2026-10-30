@@ -27,6 +27,9 @@ HIST zip members differ by year:
 
 Older data quirks:
 
+- 2000 and 2001 are almost empty: 256 rows each, from 6 and 5 CNPJs (files of about 3.5 KB
+  zipped). Coverage starts in 2002 (148,589 rows, 820 CNPJs) and 2003 (175,882 rows, 793
+  CNPJs). Checked 2026-10-30.
 - HIST 2000 has empty `VL_TOTAL` and `NR_COTST` fields (`FITVM;01.465.738/0001-97;2000-01-03;;2.597231300000;2588000.00;91000.00;0.00;`).
 - 200501 has 31 distinct dates: besides business days there are 5 Saturday and 5 Sunday rows.
   Recent months (202003, 202610) only have weekdays.
