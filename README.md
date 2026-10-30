@@ -229,6 +229,21 @@ WHERE severity = 'high' ORDER BY score DESC LIMIT 20;
 SELECT count(*) FROM 'hf://datasets/<owner>/cvm-fundos-lake@<commit>/silver/fund_daily/ano_mes=202609/part-0.parquet';
 ```
 
+**DBeaver** (or any DuckDB client): build a local DuckDB file with one view per table, then
+open it as a DuckDB connection. The file holds view definitions only (no data, no token) and
+is git ignored; rerun the script to pick up tables added since.
+
+```bash
+uv run python scripts/make_duckdb.py   # prod lake -> database/cvm_lake.duckdb
+```
+
+In DBeaver: New Database Connection, DuckDB, Path `database/cvm_lake.duckdb`. The schemas
+`silver`, `gold` and `reporting` show up as tables. Filter by `ano_mes` on large views; every
+query reads from Hugging Face. DuckDB allows one process per file: close the connection before
+rerunning the script. For the private dev lake, run it with `HF_TOKEN` set and
+`--env dev --out database/cvm_lake_dev.duckdb`, and create a secret once in the client:
+`CREATE PERSISTENT SECRET hf (TYPE huggingface, TOKEN 'hf_...');`.
+
 **Polars** (`pip install polars`; reads `HF_TOKEN` from the environment):
 
 ```python

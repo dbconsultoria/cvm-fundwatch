@@ -37,3 +37,5 @@ Thumbs.db
 /demo/
 /alerts.md
 /experiments/results/*.tmp
+/database/*.duckdb
+/database/*.duckdb.wal
