@@ -104,6 +104,38 @@ def test_incomplete_latest_date(tmp_path: Path) -> None:
     assert reporting.latest_complete_date(connect(), tmp_path) == "2026-09-29"
 
 
+def test_completeness_weighs_classes_by_equity(tmp_path: Path) -> None:
+    # Real case, 2026-10-28: 92% of the classes had reported (enough by count) but they held
+    # only 94.8% of the expected equity, and total AUM looked 7% lower than the day before.
+    panel = Panel(n=30)  # fund i holds (i + 1) / 465 of the equity
+    panel.drop(29, "2026-09-30")  # the two largest: 28 of 30 classes, about 87% of the equity
+    panel.drop(28, "2026-09-30")
+    panel.drop(0, "2026-09-29")  # the smallest: 0.2% of the equity
+    _build(tmp_path, panel)
+    rows = {r["dt"]: r for r in _read(tmp_path, "aum_flows_daily")}
+    assert rows[date(2026, 9, 30)]["coverage"] == pytest.approx(1 - 59 / 465, abs=0.01)
+    assert rows[date(2026, 9, 30)]["complete"] is False
+    assert rows[date(2026, 9, 29)]["coverage"] == pytest.approx(1 - 1 / 465, abs=0.001)
+    assert rows[date(2026, 9, 29)]["complete"] is True
+    assert rows[date(2026, 9, 1)]["coverage"] == 1.0, "August gives September its history"
+    assert reporting.latest_complete_date(connect(), tmp_path) == "2026-09-29"
+
+
+def test_a_file_without_coverage_is_read_as_null(tmp_path: Path, panel: Panel) -> None:
+    _build(tmp_path, panel)
+    path = tmp_path / reporting.reporting_path("aum_flows_daily")
+    pq.write_table(pq.read_table(path).drop_columns(["coverage"]), path)  # written before 0036
+
+    con = connect()
+    gold.load_registry(con, tmp_path)
+    reporting.build_reporting(con, tmp_path, ["202609"])
+    rows = _read(tmp_path, "aum_flows_daily")
+    assert pq.read_schema(path).equals(reporting.SCHEMAS["aum_flows_daily"])
+    august = [r for r in rows if r["dt"].month == 8]
+    assert august and all(r["coverage"] is None and r["complete"] for r in august[10:])
+    assert all(r["coverage"] is not None for r in rows if r["dt"].month == 9)
+
+
 def test_restatements_monthly(tmp_path: Path) -> None:
     rows = [
         {"cnpj": "1", "dt": date(2026, 9, 1), "quota": "1", "equity": "10"},

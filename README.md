@@ -379,7 +379,7 @@ pull request, and evaluating detectors by injecting known errors. What would cha
 | `.github/workflows/` | CI, ETL, training, Pages, keepalive |
 | [docs/architecture.md](docs/architecture.md) | diagrams, run sequence, code map |
 | [docs/sources.md](docs/sources.md) | what the source files really look like |
-| [docs/decisions.md](docs/decisions.md) | 35 architecture decision records |
+| [docs/decisions.md](docs/decisions.md) | 36 architecture decision records |
 | [docs/anomaly_detection.md](docs/anomaly_detection.md) | detector, evaluation, calibration history |
 
 ## License

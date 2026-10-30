@@ -19,6 +19,10 @@ from cvm_lake.db import copy_to_parquet, lit, one
 from cvm_lake.periods import month_bounds, shift_month
 
 UNCLASSIFIED = "Não classificado"
+# A day's subscriptions or redemptions above this multiple of the class equity (the larger of
+# the day's and the previous report's) are source errors and stay out of the flow totals
+# (ADR 0036). Measured on 202003-04 and 202609-10: 0.1% of the rows, under 0.1% of the volume.
+FLOW_LIMIT = 10
 
 
 def daily_flows_path(ym: str) -> str:
@@ -129,15 +133,23 @@ def build_month(con: duckdb.DuckDBPyConnection, root: Path, ym: str) -> GoldStat
     flows = copy_to_parquet(
         con,
         f"""
+        WITH e AS (
+            SELECT *, greatest(subscriptions, redemptions) <= {FLOW_LIMIT} * greatest(
+                       coalesce(equity, 0),
+                       coalesce(lag(equity) OVER (PARTITION BY cnpj, subclass_id ORDER BY dt), 0)
+                   ) AS flow_ok
+            FROM enriched
+        )
         SELECT dt, peer_group, is_fic,
                count(DISTINCT cnpj) AS n_classes,
                count(*) AS n_reports,
                sum(equity) AS aum,
-               sum(subscriptions) AS subscriptions,
-               sum(redemptions) AS redemptions,
-               sum(subscriptions) - sum(redemptions) AS net_flow,
+               sum(subscriptions) FILTER (WHERE flow_ok IS NOT FALSE) AS subscriptions,
+               sum(redemptions) FILTER (WHERE flow_ok IS NOT FALSE) AS redemptions,
+               sum(subscriptions) FILTER (WHERE flow_ok IS NOT FALSE)
+                   - sum(redemptions) FILTER (WHERE flow_ok IS NOT FALSE) AS net_flow,
                sum(shareholders)::BIGINT AS shareholders
-        FROM enriched
+        FROM e
         WHERE {in_month}
         GROUP BY ALL
         ORDER BY dt, peer_group, is_fic NULLS LAST

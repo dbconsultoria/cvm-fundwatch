@@ -188,6 +188,41 @@ def test_daily_flows_sum_subclasses_and_reconcile(root: Path) -> None:
     assert stats.peer_coverage == 1.0
 
 
+def test_implausible_flows_stay_out_of_the_totals(root: Path) -> None:
+    # Real case, CNPJ 88007505000129 in 2003-01: about R$ 6 million of equity and a reported
+    # subscription of R$ 832,260,010,000. Equity did not move, so the flow is a source error.
+    def row(day: int, equity: str, subs: str = "0", reds: str = "0", cnpj: str = A) -> dict:
+        return {
+            "cnpj": cnpj,
+            "dt": date(2026, 10, day),
+            "quota": "1",
+            "equity": equity,
+            "subscriptions": subs,
+            "redemptions": reds,
+        }
+
+    write_silver_fund_daily(
+        root, "202609", [{"cnpj": B, "dt": date(2026, 9, 30), "quota": "1", "equity": "500"}]
+    )
+    write_silver_fund_daily(
+        root,
+        "202610",
+        [
+            row(1, "6000000", subs="832260010000"),  # dropped: 138,710x the equity
+            row(2, "6000000", subs="60000000"),  # kept: exactly 10x
+            row(1, "0", reds="500", cnpj=B),  # kept: a closing fund redeems its last equity
+            row(2, "100", subs="100", cnpj=B),  # kept: reopens with its first subscription
+        ],
+    )
+    stats = _build(root, "202610")
+    flows = {r["dt"]: r for r in _read(root, gold.daily_flows_path("202610"))}
+    assert flows[date(2026, 10, 1)]["subscriptions"] == Decimal("0.00")
+    assert flows[date(2026, 10, 1)]["redemptions"] == Decimal("500.00")
+    assert flows[date(2026, 10, 2)]["subscriptions"] == Decimal("60000100.00")
+    assert flows[date(2026, 10, 1)]["aum"] == Decimal("6000000.00"), "AUM is not touched"
+    assert stats.aum_gold == stats.aum_silver
+
+
 def test_peer_group_precedence(root: Path) -> None:
     days = [date(2004, 6, 1), date(2010, 6, 1), date(2025, 6, 23), date(2025, 6, 24)]
     write_silver_fund_daily(

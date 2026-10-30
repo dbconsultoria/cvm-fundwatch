@@ -430,3 +430,31 @@ Short ADR style entries. Status is `accepted`, `proposed` (waiting for review) o
     from `main` with a public repo (ADR 0022), whatever the token can reach.
 - Consequence: with one token, unreviewed code on `development` runs with a credential that can
   write prod. Accepted here; for a team, split the tokens and add a reviewer.
+
+## 0036 Implausible flows and equity weighted completeness
+
+- Status: accepted
+- Context: with the full history on the dashboard two problems showed up.
+  - One fund (CNPJ 88007505000129, about R$ 6 million of equity) reported subscriptions of
+    R$ 832,260,010,000 three times in 2002-12 and 2003-01. Its equity never moved. Summed into
+    the monthly flows, that single source error flattened 26 years of the chart.
+  - On 2026-10-28, 92% of the classes had reported, enough for the class count rule (ADR 0034),
+    but large funds were still missing: total AUM looked 7% lower than five days before and
+    the overview showed -5.6% for the month.
+- Decision:
+  - Gold `daily_flows` leaves out the subscriptions and redemptions of a report when either is
+    above 10 times the larger of the class equity on that day and on its previous report. AUM is
+    not touched. On 202003-04 and 202609-10 this drops 0.1% of the rows and less than 0.1% of
+    the flow volume, all of it absurd (for example the same R$ 453 million redemption reported
+    four days in a row by a fund of R$ 18 million). Closing funds (redeeming their last equity)
+    and new funds (first subscription) are kept.
+  - Reporting `aum_flows_daily` gets a `coverage` column: of the classes expected on a date
+    (those that reported in the 14 days before), the equity weighted share that has reported.
+    A date is complete when the class count rule holds and coverage is at least 99%. Measured:
+    normal days 99.4% or more, the March 2020 crash 99.9% (crashes move prices, not who
+    reports), the late days 2026-10-26 to 28 98.8%, 98.1% and 94.8%.
+  - Files written before this decision read `coverage` as NULL, and NULL falls back to the
+    count rule.
+- Consequence: history keeps the old flows and no coverage until its months are rebuilt; rerun
+  the backfill ranges (idempotent) to apply both everywhere. The detector and the model do not
+  read these tables, so no retraining is needed.

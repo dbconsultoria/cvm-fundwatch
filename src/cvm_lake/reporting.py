@@ -12,14 +12,21 @@ from pathlib import Path
 
 import duckdb
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from cvm_lake import gold, silver
 from cvm_lake.anomalies.detector import anomalies_path
 from cvm_lake.anomalies.restatements import restatements_path
 from cvm_lake.db import copy_to_parquet, lit, one
+from cvm_lake.periods import shift_month
 
 RECENT_DAYS = 90  # anomalies_recent keeps this many days back from the newest report
 COMPLETE_SHARE = 0.9  # a date is complete with 90% of the classes of the previous dates
+# ... and when the classes that reported held 99% of the equity of the classes expected that day
+# (ADR 0036). Normal days measure 99.4% or more, the March 2020 crash 99.9%; late dates still
+# filling in measured 98.8%, 98.1% and 94.8% (2026-10-26 to 28).
+COMPLETE_AUM_SHARE = 0.99
+EXPECTED_DAYS = 14  # a class is expected on a date when it reported in the 14 days before it
 MIN_RETURN_DAYS = 15  # a fund needs this many daily returns in a month for the monthly table
 
 SCHEMAS: dict[str, pa.Schema] = {
@@ -33,6 +40,7 @@ SCHEMAS: dict[str, pa.Schema] = {
             ("subscriptions", pa.float64()),
             ("redemptions", pa.float64()),
             ("net_flow", pa.float64()),
+            ("coverage", pa.float64()),  # equity weighted share of the expected classes
             ("complete", pa.bool_()),
         ]
     ),
@@ -112,8 +120,13 @@ def _merge(
     parts = []
     existing = root / reporting_path(name)
     if existing.exists():
+        # A file written before a column was added reads that column as NULL.
+        have = set(pq.read_schema(existing).names)
+        old = ", ".join(
+            f.name if f.name in have else f"NULL::{_sql_type(f.type)} AS {f.name}" for f in schema
+        )
         parts.append(
-            f"SELECT {columns} FROM read_parquet({lit(existing)}) "
+            f"SELECT {old} FROM read_parquet({lit(existing)}) "
             f"WHERE {month_expr} NOT IN {_months_sql(months)}"
         )
     if fresh is not None:
@@ -124,6 +137,54 @@ def _merge(
     if post:
         query = post.format(source=query)
     return copy_to_parquet(con, f"{query} ORDER BY {order}", root, reporting_path(name), schema)
+
+
+def _sql_type(t: pa.DataType) -> str:
+    return {pa.float64(): "DOUBLE", pa.bool_(): "BOOLEAN", pa.int64(): "BIGINT"}.get(t, "VARCHAR")
+
+
+def _coverage_sql(root: Path, months: list[str]) -> str:
+    """Per date of ``months``: equity of the expected classes that reported / all expected.
+
+    A class is expected on date d when it reported in the EXPECTED_DAYS before d; its weight is
+    the equity of that last report. The previous month is read so the first days have history.
+    """
+    with_previous = [shift_month(min(months), -1), *months]
+    files = _files(root, [silver.fund_daily_path(m) for m in with_previous])
+    if files is None:
+        return "SELECT NULL::DATE AS dt, NULL::DOUBLE AS coverage WHERE false"
+    return f"""
+        WITH f AS (
+            SELECT cnpj, coalesce(subclass_id, '') AS sc, dt, equity::DOUBLE AS eq
+            FROM read_parquet({files}, hive_partitioning = false) WHERE equity > 0
+        ),
+        l AS (
+            SELECT *, lag(dt) OVER w AS prev_dt, lag(eq) OVER w AS prev_eq,
+                   lead(dt) OVER w AS next_dt
+            FROM f WINDOW w AS (PARTITION BY cnpj, sc ORDER BY dt)
+        ),
+        cal AS (
+            SELECT dt, lead(dt) OVER (ORDER BY dt) AS next_cal FROM (SELECT DISTINCT dt FROM f)
+        ),
+        dates AS (SELECT dt FROM cal WHERE strftime(dt, '%Y%m') IN {_months_sql(months)}),
+        present AS (
+            SELECT dt, sum(prev_eq) AS eq FROM l
+            WHERE prev_dt >= dt - INTERVAL {EXPECTED_DAYS} DAY GROUP BY dt
+        ),
+        -- only reports followed by a gap can make a class missing, so join just those
+        gaps AS (
+            SELECT l.dt, l.eq, l.next_dt FROM l JOIN cal USING (dt)
+            WHERE l.next_dt IS NULL OR l.next_dt > cal.next_cal
+        ),
+        missing AS (
+            SELECT d.dt, sum(g.eq) AS eq FROM gaps g JOIN dates d
+              ON d.dt > g.dt AND d.dt <= g.dt + INTERVAL {EXPECTED_DAYS} DAY
+             AND (g.next_dt IS NULL OR d.dt < g.next_dt)
+            GROUP BY d.dt
+        )
+        SELECT d.dt, p.eq / nullif(p.eq + coalesce(m.eq, 0), 0) AS coverage
+        FROM dates d LEFT JOIN present p USING (dt) LEFT JOIN missing m USING (dt)
+    """
 
 
 @dataclass(frozen=True)
@@ -149,18 +210,22 @@ def build_reporting(
         and f"""SELECT dt, peer_group, is_fic, n_classes, aum::DOUBLE AS aum,
                        subscriptions::DOUBLE AS subscriptions,
                        redemptions::DOUBLE AS redemptions, net_flow::DOUBLE AS net_flow,
-                       NULL::BOOLEAN AS complete
-                FROM read_parquet({flows})""",
+                       c.coverage, NULL::BOOLEAN AS complete
+                FROM read_parquet({flows})
+                LEFT JOIN ({_coverage_sql(root, months)}) c USING (dt)""",
         ym,
         months,
         "dt, peer_group, is_fic NULLS LAST",
-        # Completeness is a property of the whole series (ADR 0021): a date is complete when it
-        # has 90% of the median class count of the 10 dates before it.
+        # Completeness is a property of the whole series (ADR 0021, 0036): a date is complete
+        # when it has 90% of the median class count of the 10 dates before it and, where the
+        # coverage is known, 99% of the expected equity.
         post=f"""
             WITH s AS ({{source}}),
-                 d AS (SELECT dt, sum(n_classes) AS n FROM s GROUP BY dt),
+                 d AS (SELECT dt, sum(n_classes) AS n, any_value(coverage) AS coverage
+                       FROM s GROUP BY dt),
                  c AS (SELECT dt, n >= {COMPLETE_SHARE} * coalesce(median(n) OVER (
                            ORDER BY dt ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING), 0)
+                           AND coalesce(coverage >= {COMPLETE_AUM_SHARE}, true)
                            AS complete FROM d)
             SELECT s.* EXCLUDE (complete), c.complete FROM s JOIN c USING (dt)
         """,
