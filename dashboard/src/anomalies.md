@@ -16,13 +16,14 @@ const restated = FileAttachment("data/restatements.csv").csv({typed: true});
 
 ```js
 const order = ["high", "medium", "low"];
-const bySeverity = d3.rollups(weekly, (v) => d3.sum(v, (d) => d.n), (d) => d.week, (d) => d.severity)
-  .flatMap(([week, rows]) => rows.map(([severity, n]) => ({week, severity, n})));
+// Monthly, not weekly: 26 years of weekly bars are thinner than a pixel and vanish.
+const bySeverity = d3.rollups(weekly, (v) => d3.sum(v, (d) => d.n), (d) => +d3.utcMonth(d.week), (d) => d.severity)
+  .flatMap(([month, rows]) => rows.map(([severity, n]) => ({month: new Date(month), severity, n})));
 ```
 
 <div class="card">
 
-## Findings per week
+## Findings per month
 
 ```js
 display(Plot.plot({
@@ -30,7 +31,7 @@ display(Plot.plot({
   height: 300,
   y: {grid: true, label: "findings"},
   color: {domain: order, range: ["#d62728", "#ff9f0e", "#9aa0a6"], legend: true},
-  marks: [Plot.rectY(bySeverity, {x: "week", interval: "week", y: "n", fill: "severity", order, tip: true}), Plot.ruleY([0])]
+  marks: [Plot.rectY(bySeverity, {x: "month", interval: "month", y: "n", fill: "severity", order, inset: 0, tip: true}), Plot.ruleY([0])]
 }));
 ```
 
