@@ -11,6 +11,9 @@ the daily fund reports, and publishes a static dashboard on GitHub Pages.
 - **Anomaly detection**: rules, robust statistics, an accounting identity check, peer context
   and an Isolation Forest, evaluated with injected errors. Market wide moves are not flagged.
 - **Dashboard**: [dbconsultoria.github.io/cvm-fundwatch](https://dbconsultoria.github.io/cvm-fundwatch/)
+- **Anomaly report**: [dbconsultoria.github.io/cvm-fundwatch/anomalies](https://dbconsultoria.github.io/cvm-fundwatch/anomalies),
+  findings per month and by type, the high and medium findings of the last 90 days with CNPJ
+  search, and the corrections CVM published later
 - **Data**: [huggingface.co/datasets/dbconsultoria/cvm-fundos-lake](https://huggingface.co/datasets/dbconsultoria/cvm-fundos-lake)
 
 No servers, no databases, no credit card.
