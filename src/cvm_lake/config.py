@@ -35,6 +35,7 @@ class PublishConfig:
 class QualityConfig:
     max_row_drop_pct: float
     max_invalid_value_share: float
+    min_rows_for_share: int
     min_peer_coverage: float
 
 
@@ -82,6 +83,7 @@ def load_settings(env: str, path: Path | None = None) -> Settings:
             quality=QualityConfig(
                 max_row_drop_pct=float(raw["quality"]["max_row_drop_pct"]),
                 max_invalid_value_share=float(raw["quality"]["max_invalid_value_share"]),
+                min_rows_for_share=int(raw["quality"]["min_rows_for_share"]),
                 min_peer_coverage=float(raw["quality"]["min_peer_coverage"]),
             ),
             publish=PublishConfig(

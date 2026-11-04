@@ -458,3 +458,17 @@ Short ADR style entries. Status is `accepted`, `proposed` (waiting for review) o
 - Consequence: history keeps the old flows and no coverage until its months are rebuilt; rerun
   the backfill ranges (idempotent) to apply both everywhere. The detector and the model do not
   read these tables, so no retraining is needed.
+
+## 0037 Share checks need enough rows
+
+- Status: accepted
+- Context: the scheduled run of 2026-11-04 failed on `silver/fund_daily/202611`: 2 rows with
+  equity < 0 or quota <= 0 out of 14 (14.29%, max 5%). CVM had just opened the November file.
+  Two bad rows in a full month are about 0.0004%; in the first rows of a month they are noise
+  that blocks the whole run, including the late reports of the previous month.
+- Decision: the invalid value share blocks only when the partition has at least
+  `quality.min_rows_for_share` rows (1000; a full month has about 500,000). Below that the check
+  still runs and is reported as a warning.
+- Consequence: a red ETL keeps meaning a real problem. A broken first file of a month is caught
+  a few days later, once it passes 1000 rows, and the row count drop check still guards
+  partitions that shrink.

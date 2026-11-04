@@ -50,4 +50,5 @@ peer_groups:
 quality:
   max_row_drop_pct: 20          # silver partition may not shrink more than this vs the last run
   max_invalid_value_share: 0.05 # equity < 0 or quota <= 0 per partition (real: 0.2% to 2.1%)
+  min_rows_for_share: 1000      # below this a share only warns: a new month starts with a few rows
   min_peer_coverage: 0.95       # warn when fewer rows than this get a peer group

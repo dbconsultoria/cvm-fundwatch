@@ -15,7 +15,9 @@ from cvm_lake.silver import FundDailyStats, PtaxStats
 
 from fakes import write_silver_fund_daily
 
-CFG = QualityConfig(max_row_drop_pct=20, max_invalid_value_share=0.05, min_peer_coverage=0.95)
+CFG = QualityConfig(
+    max_row_drop_pct=20, max_invalid_value_share=0.05, min_rows_for_share=2, min_peer_coverage=0.95
+)
 YM = "202610"
 STATS = FundDailyStats(YM, "v2", 2, 2, 0, 0, 0)
 
@@ -80,6 +82,15 @@ def test_mass_of_invalid_values_fails(tmp_path: Path) -> None:
     _two_rows(tmp_path, equity="-5")  # 1 of 2 rows = 50%
     r = _by_name(quality.check_fund_daily(connect(), tmp_path, STATS, None, CFG))
     assert r["invalid_value_share"].blocking
+
+
+def test_invalid_values_in_a_new_month_only_warn(tmp_path: Path) -> None:
+    # Real case, 202611 on 2026-11-04: 2 bad rows of the first 14 (14.29%) failed the run.
+    _two_rows(tmp_path, equity="-5")
+    cfg = replace(CFG, min_rows_for_share=1000)
+    r = _by_name(quality.check_fund_daily(connect(), tmp_path, STATS, None, cfg))
+    assert not r["invalid_value_share"].passed and not r["invalid_value_share"].blocking
+    assert "only warns below 1000 rows" in r["invalid_value_share"].detail
 
 
 def test_parse_problems_fail_and_drops_warn(tmp_path: Path) -> None:

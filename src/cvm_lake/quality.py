@@ -116,14 +116,18 @@ def check_fund_daily(
 
     invalid = _scalar(con, f"SELECT count(*) FROM {lit(path)} WHERE equity < 0 OR quota <= 0")
     share = invalid / stats.rows if stats.rows else 0.0
+    # A month CVM has just opened holds a handful of rows, and two bad ones are already 14%
+    # (ADR 0037). The share only blocks once the partition is large enough to mean something.
+    enough = stats.rows >= cfg.min_rows_for_share
     results.append(
         CheckResult(
             "invalid_value_share",
             scope,
             share <= cfg.max_invalid_value_share,
-            Severity.FAIL,
+            Severity.FAIL if enough else Severity.WARN,
             f"{invalid} rows with equity < 0 or quota <= 0 ({share:.2%}, "
-            f"max {cfg.max_invalid_value_share:.2%})",
+            f"max {cfg.max_invalid_value_share:.2%})"
+            + ("" if enough else f", only warns below {cfg.min_rows_for_share} rows"),
         )
     )
     return results
